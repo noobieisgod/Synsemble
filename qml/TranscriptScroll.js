@@ -14,6 +14,9 @@ function restore(view, state) {
     view.forceLayout();
     if (state.follow) {
         view.positionViewAtEnd();
+        // Variable-height delegates refine the estimated extent when instantiated.
+        view.forceLayout();
+        view.positionViewAtEnd();
         return;
     }
 

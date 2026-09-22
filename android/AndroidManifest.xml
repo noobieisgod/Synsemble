@@ -8,6 +8,7 @@
     <application
         android:name="org.qtproject.qt.android.bindings.QtApplication"
         android:allowBackup="false"
+        android:enableOnBackInvokedCallback="false"
         android:hardwareAccelerated="true"
         android:icon="@mipmap/ic_launcher"
         android:label="Synsemble"

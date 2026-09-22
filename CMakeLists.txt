@@ -10,7 +10,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Sql Network)
+find_package(Qt6 6.9 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Sql Network)
 
 qt_standard_project_setup()
 qt_policy(SET QTP0001 NEW)
@@ -71,6 +71,9 @@ qt_add_qml_module(AIMeetingTable
     VERSION 1.0
     QML_FILES
         qml/Main.qml
+        qml/ConversationPage.qml
+        qml/SessionDetails.qml
+        qml/SettingsPage.qml
         qml/TranscriptScroll.js
 )
 
