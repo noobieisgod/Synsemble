@@ -1,0 +1,114 @@
+// The test harness copies this template to .qml; Android deployment must not scan QtTest.
+import QtQuick
+import QtQuick.Controls
+import QtTest
+import "app" as App
+
+TestCase {
+    name: "MobilePerformance"
+    when: windowShown
+    QtObject {
+        id: backend
+        property string currentTableId: "fixture-table"
+        property bool initialized: true
+        property bool running: false
+        property bool attachmentImportInProgress: false
+        property string attachmentImportStatus: ""
+        property string phase: "Idle"
+        property bool validTeam: false
+        property var events: []
+        property var messages: []
+        property bool canResume: true
+        property int submissions: 0
+        property string appearance: "Light"
+        property string fontStyle: "System"
+        property bool guideSeen: true
+        property int lastRefreshedProvider: -1
+        function acknowledgeQuickGuide() { guideSeen = true; settingsChanged(); return true; }
+        function refreshProviderModels(index) { lastRefreshedProvider = index; }
+        function saveAppearance(mode, theme, style) { appearance = mode; fontStyle = style; settingsChanged(); return true; }
+        signal stateChanged()
+        signal tablesChanged()
+        signal seatsChanged()
+        signal transcriptChanged()
+        signal attachmentsChanged()
+        signal artifactsChanged()
+        signal logsChanged()
+        signal settingsChanged()
+        signal attachmentImportFailed()
+        signal continuationRequested(string reason)
+        function startupInitialRefreshStarted() {}
+        function startupInitialRefreshCompleted() {}
+        function startupPrimaryControlsReady() {}
+        function startupTranscriptVisualStable() {}
+        function currentTable() { return {tableId: currentTableId, title: "A better way to work", phase: phase, round: 0, inputTokens: 0, outputTokens: 0, usedTokens: 0, maxTokens: 48000, elapsed: "00:00", canResume: canResume, continuationPending: phase === "Needs continuation"}; }
+        function tables() { return [currentTable()]; }
+        function seats() { return []; }
+        function transcript() { return messages; }
+        function attachments() { return []; }
+        function artifacts() { return []; }
+        function logs() { return events; }
+        function modelRefreshStatuses() { return []; }
+        function settings() { return {appearance: appearance, colorTheme: "Signal Session", fontStyle: fontStyle, quickGuideSeen: guideSeen, maxTokensPerPhase: 12000, maxTotalTokens: 48000, maxRounds: 3, maxExecQcLoops: 3, maxPhaseSeconds: 600, maxSessionSeconds: 3600}; }
+        function attachmentSafeguards() { return {}; }
+        function modelsForProvider(index) { return [{id: "fixture-model", displayName: "Fixture model"}]; }
+        function hasCredential(index) { return false; }
+        function lastError() { return "Add and configure your agents first."; }
+        function sendMessage(message) { return validTeam; }
+        function submitTask(message) { if (validTeam) ++submissions; return validTeam; }
+        function selectTable(id) { currentTableId = id; stateChanged(); transcriptChanged(); }
+        function runOrResume() { return false; }
+    }
+
+    App.Main { id: app; appController: backend; width: 420; height: 860 }
+    Component { id: shellFixture; App.Main { appController: backend; width: 420; height: 860 } }
+    function test_shellStartup() {
+        app.visible = false;
+        backend.messages = []; backend.events = [];
+        var times = [];
+        for (var sample = 0; sample < 7; ++sample) {
+            var started = Date.now();
+            var shell = shellFixture.createObject(null);
+            verify(shell !== null);
+            verify(screenCapture.render(shell));
+            times.push(Date.now() - started);
+            shell.destroy();
+            wait(50);
+        }
+        times.sort(function(a,b) { return a-b; });
+        console.info((baselineMode ? "baseline " : "updated ") + "shell_create_render_median_ms=" + times[3]);
+        app.visible = true;
+    }
+    function test_collections_data() {
+        return [{tag:"transcript", activity:false}, {tag:"activity", activity:true}];
+    }
+    function test_collections(data) {
+        var rows = [];
+        for (var i = 0; i < 2000; ++i) rows.push({
+            entryId:"message-" + i, speaker:"Fixture agent", role:"Participant",
+            model:"Fixture", timestamp:"09:41", color:"#16866c", isUser:false,
+            content:"Synthetic message " + i + " " + "x".repeat(256),
+            summary:"Synthetic event " + i, type:"Turn", actor:"Fixture agent",
+            phase:"Planning", round:1
+        });
+        if (data.activity) {
+            if (baselineMode) app.selectedPage = 2;
+            else app.openDetails(2);
+        } else app.selectedPage = 1;
+        wait(350);
+        var times = [];
+        for (var sample = 0; sample < 7; ++sample) {
+            if (data.activity) { backend.events = []; backend.logsChanged(); }
+            else { backend.messages = []; backend.transcriptChanged(); }
+            wait(50);
+            var started = Date.now();
+            if (data.activity) { backend.events = rows; backend.logsChanged(); }
+            else { backend.messages = rows; backend.transcriptChanged(); }
+            verify(screenCapture.render(app));
+            times.push(Date.now() - started);
+        }
+        times.sort(function(a,b) { return a-b; });
+        console.info((baselineMode ? "baseline " : "updated ") + data.tag + "_2000_render_median_ms=" + times[3]);
+        if (captureDirectory.length > 0) verify(screenCapture.capture(app, (baselineMode ? "baseline-" : "updated-") + data.tag));
+    }
+}

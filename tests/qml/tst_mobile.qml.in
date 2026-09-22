@@ -1,0 +1,446 @@
+// The test harness copies this template to .qml; Android deployment must not scan QtTest.
+import QtQuick
+import QtQuick.Controls
+import QtTest
+import "app" as App
+
+TestCase {
+    id: suite
+    name: "MobileScreens"
+    when: windowShown
+    width: 420
+    height: 860
+    QtObject {
+        id: backend
+        property string currentTableId: "fixture-table"
+        property bool initialized: true
+        property bool running: false
+        property bool attachmentImportInProgress: false
+        property string attachmentImportStatus: ""
+        property string phase: "Idle"
+        property bool validTeam: false
+        property var messages: []
+        property var agents: []
+        property string pauseReason: ""
+        property bool canResume: true
+        property string forcedAction: ""
+        property string failure: ""
+        property int copies: 0
+        function duplicateCurrentTable() { ++copies; phase = "Idle"; canResume = true; selectTable("fresh-table"); return true; }
+        property int submissions: 0
+        property string appearance: "Light"
+        property string fontStyle: "System"
+        property bool guideSeen: true
+        property int lastRefreshedProvider: -1
+        function acknowledgeQuickGuide() { guideSeen = true; settingsChanged(); return true; }
+        function refreshProviderModels(index) { lastRefreshedProvider = index; }
+        function saveAppearance(mode, theme, style) { appearance = mode; fontStyle = style; settingsChanged(); return true; }
+        signal stateChanged()
+        signal tablesChanged()
+        signal seatsChanged()
+        signal transcriptChanged()
+        signal attachmentsChanged()
+        signal artifactsChanged()
+        signal logsChanged()
+        signal settingsChanged()
+        signal attachmentImportFailed()
+        signal continuationRequested(string reason)
+        function startupInitialRefreshStarted() {}
+        function startupInitialRefreshCompleted() {}
+        function startupPrimaryControlsReady() {}
+        function startupTranscriptVisualStable() {}
+        function currentTable() {
+            var action = forcedAction || (!canResume ? "fresh" : phase === "Idle" ? "start" : phase === "Paused" ? "resume" : phase === "Needs continuation" ? "continue" : ["Failed","Stopped","Completed"].indexOf(phase) >= 0 ? "restart" : "pause");
+            return {nextAction: action, actionLabel: ({start:"Start task", fresh:"Create fresh table", resume:"Resume", continue:"Continue", retry:"Retry operation", restart:"Run again", pause:"Pause"})[action], actionHint:"Safe next action: " + action, canSubmit:canResume, latestFailure:failure,tableId: currentTableId, title: "A better way to work", phase: phase, round: 0, inputTokens: 0, outputTokens: 0, usedTokens: 0, maxTokens: 48000, elapsed: "00:00", canResume: canResume, continuationReason: pauseReason, continuationPending: phase === "Needs continuation"}; }
+        function tables() { return [currentTable()]; }
+        function seats() { return agents; }
+        function transcript() { return messages; }
+        function attachments() { return []; }
+        function artifacts() { return []; }
+        function logs() { return []; }
+        function modelRefreshStatuses() { return []; }
+        function settings() { return {appearance: appearance, colorTheme: "Signal Session", fontStyle: fontStyle, quickGuideSeen: guideSeen, maxTokensPerPhase: 12000, maxTotalTokens: 48000, maxRounds: 3, maxExecQcLoops: 3, maxPhaseSeconds: 600, maxSessionSeconds: 3600}; }
+        function attachmentSafeguards() { return {}; }
+        function modelsForProvider(index) { return [{id: "fixture-model", displayName: "Fixture model"}]; }
+        function hasCredential(index) { return false; }
+        function lastError() { return "Add and configure your agents first."; }
+        function sendMessage(message) { return validTeam; }
+        function submitTask(message) { if (validTeam && canResume) ++submissions; return validTeam && canResume; }
+        function selectTable(id) { currentTableId = id; stateChanged(); transcriptChanged(); }
+        function runOrResume() { return false; }
+    }
+    App.Main { id: app; appController: backend; brandMark: backend.appearance === "Dark" ? Qt.resolvedUrl("synsemble-light.png") : Qt.resolvedUrl("synsemble.png") }
+    function init() {
+        app.handleBack(); app.handleBack(); app.handleBack();
+        app.selectedPage = 1;
+        app.selectedSettingsPage = 0;
+        backend.fontStyle = "System";
+        backend.settingsChanged();
+        backend.phase = "Idle";
+        backend.forcedAction = ""; backend.failure = ""; backend.copies = 0;
+        backend.running = false;
+        backend.pauseReason = "";
+        backend.agents = [];
+        backend.seatsChanged();
+        backend.canResume = true;
+        backend.submissions = 0;
+        backend.currentTableId = "fixture-table";
+        backend.validTeam = false;
+        backend.messages = [];
+        backend.transcriptChanged();
+        backend.stateChanged();
+        app.composer.text = "";
+    }
+    function test_providerRefreshTargetsOnlySelectedProvider() {
+        app.selectedPage = 3;
+        var providers = findChild(app, "providerRepeater");
+        compare(providers.count, 3);
+        var button = findChild(providers.itemAt(0), "refreshProvider0");
+        verify(button !== null);
+        button.clicked();
+        compare(backend.lastRefreshedProvider, 0);
+        findChild(providers.itemAt(2), "refreshProvider2").clicked();
+        compare(backend.lastRefreshedProvider, 2);
+    }
+    function test_logoBackgroundIsTransparent() { verify(screenCapture.transparentMarks()); }
+    function test_guideExplainsArtifactLocation() {
+        app.openQuickGuide();
+        var guide = findChild(app, "quickGuide");
+        tryCompare(guide, "opened", true);
+        var instruction = findChild(app, "guideArtifacts");
+        verify(instruction.visible);
+        verify(instruction.text.indexOf("tap Team, then choose Artifacts to read it") >= 0);
+        guide.close();
+    }
+    function test_fontsAreDistinct() {
+        backend.fontStyle = "Workspace"; backend.settingsChanged();
+        tryCompare(app, "uiFont", "Inter");
+        backend.fontStyle = "Console"; backend.settingsChanged();
+        tryCompare(app, "uiFont", "JetBrains Mono");
+        backend.fontStyle = "System"; backend.settingsChanged();
+        compare(app.uiFont, Application.font.family);
+    }
+    function test_guideCanBeDismissedAndReopened() {
+        backend.guideSeen = false; backend.settingsChanged();
+        app.openQuickGuide();
+        var guide = findChild(app, "quickGuide");
+        tryCompare(guide, "visible", true);
+        screenCapture.pressBack(app);
+        tryCompare(guide, "visible", false);
+        tryCompare(backend, "guideSeen", true);
+        app.openQuickGuide();
+        tryCompare(guide, "visible", true);
+        app.handleBack();
+    }
+    function test_firstRunOpensGuideAutomatically() {
+        backend.guideSeen = false;
+        var component = Qt.createComponent("app/Main.qml");
+        compare(component.status, Component.Ready);
+        var firstRun = createTemporaryObject(component, suite, {appController: backend});
+        verify(firstRun !== null);
+        var guide = findChild(firstRun, "quickGuide");
+        tryCompare(guide, "visible", true);
+        guide.close();
+        tryCompare(backend, "guideSeen", true);
+    }
+    function test_panelsAreWindowAligned() {
+        app.width = 412; app.height = 915;
+        var drawer = findChild(app, "tableDrawer");
+        drawer.open();
+        tryCompare(drawer, "opened", true);
+        compare(drawer.y, 0);
+        compare(drawer.height, app.height);
+        compare(drawer.topPadding, 0);
+        compare(drawer.bottomPadding, 0);
+        compare(drawer.contentItem.mapToItem(null, 0, 0).y, 0);
+        compare(drawer.parent.mapToItem(null, 0, 0).y, 0);
+        drawer.close();
+        app.openDetails(0);
+        var sheet = findChild(app, "detailsSheet");
+        tryCompare(sheet, "opened", true);
+        compare(sheet.y, 0);
+        compare(sheet.parent.mapToItem(null, 0, 0).y, 0);
+        compare(sheet.height, app.height);
+        compare(sheet.topPadding, 0);
+        compare(sheet.bottomPadding, 0);
+        compare(sheet.contentItem.mapToItem(null, 0, 0).y, 0);
+        app.handleBack();
+    }
+    function test_tableMenuBackAndTableSwitch() {
+        var drawer = findChild(app, "tableDrawer");
+        drawer.open();
+        var menu = findChild(app, "tableActionsMenu");
+        findChild(app, "tableActionsButton").clicked();
+        tryCompare(menu, "visible", true);
+        screenCapture.pressBack(app);
+        tryCompare(menu, "visible", false);
+        verify(drawer.visible);
+        findChild(app, "tableActionsButton").clicked();
+        tryCompare(menu, "visible", true);
+        backend.selectTable("another-table");
+        tryCompare(menu, "visible", false);
+        drawer.close();
+    }
+    function test_settingsCannotScrollHorizontally() {
+        app.selectedPage = 3;
+        var scroll = findChild(app, "settingsScroll");
+        for (var i = 0; i < 3; ++i) {
+            app.selectedSettingsPage = i;
+            wait(20);
+            compare(scroll.contentWidth, scroll.availableWidth);
+            mouseDrag(scroll, scroll.width / 2, 30, 80, 0);
+            tryCompare(scroll.contentItem, "contentX", 0);
+        }
+    }
+    function test_draftSurvivesInvalidConfiguration() {
+        app.composer.text = "Keep this task";
+        app.submitComposer();
+        compare(app.composer.text, "Keep this task");
+        app.handleBack();
+    }
+    function test_keyboardKeepsComposerAboveOverlap() {
+        var workspace = findChild(app, "workspace");
+        var originalHeight = workspace.height;
+        app.keyboardRectangle = Qt.rect(0, app.height - 300, app.width, 300);
+        tryCompare(app, "bottomInset", 300);
+        verify(workspace.height <= originalHeight - 290);
+        tryVerify(function() {
+            var position = app.composer.mapToItem(app.contentItem, 0, app.composer.height);
+            return position.y <= workspace.y + workspace.height;
+        });
+        app.keyboardRectangle = Qt.binding(function() { return InputMethod.visible ? InputMethod.keyboardRectangle : Qt.rect(0, 0, 0, 0); });
+    }
+    function test_draftsStayWithTable() {
+        backend.selectTable("first");
+        app.composer.text = "First task";
+        backend.selectTable("second");
+        compare(app.composer.text, "");
+        app.composer.text = "Second task";
+        backend.selectTable("first");
+        compare(app.composer.text, "First task");
+    }
+    function test_stateActions_data() {
+        return [
+            {tag:"Idle", action:"start", label:"Start task"},
+            {tag:"Research", action:"pause", label:"Pause"}, {tag:"Planning", action:"pause", label:"Pause"},
+            {tag:"Execution", action:"pause", label:"Pause"}, {tag:"Quality Control", action:"pause", label:"Pause"},
+            {tag:"Present", action:"pause", label:"Pause"}, {tag:"Paused", action:"resume", label:"Resume"},
+            {tag:"Needs continuation", action:"continue", label:"Continue"},
+            {tag:"Completed", action:"restart", label:"Run again"}, {tag:"Stopped", action:"restart", label:"Run again"},
+            {tag:"Failed", action:"restart", label:"Run again"},
+            {tag:"Rejected response", action:"retry", label:"Retry operation"},
+            {tag:"Unknown", action:"fresh", label:"Create fresh table"}
+        ];
+    }
+    function test_stateActions(data) {
+        backend.phase = data.tag; backend.forcedAction = data.action;
+        backend.canResume = data.tag !== "Unknown";
+        backend.failure = ["Failed","Stopped"].indexOf(data.tag) >= 0 ? "Authentication rejected" : "";
+        backend.stateChanged();
+        var action = findChild(app, "sessionAction");
+        compare(action.visible, data.action !== "start");
+        if (action.visible) compare(action.text, data.label);
+        else compare(findChild(app, "sendTask").text, data.label);
+        verify(findChild(app, "actionHint").text.length > 0);
+        compare(findChild(app, "providerRecovery").visible, backend.failure.length > 0);
+    }
+    function test_guideCenteredAndFooterReachable() {
+        for (var size of [[412,915],[915,412]]) {
+            app.width=size[0]; app.height=size[1];
+            var drawer = findChild(app, "tableDrawer"); drawer.open();
+            tryCompare(drawer, "opened", true);
+            var guideButton=findChild(app,"drawerGuide"), settingsButton=findChild(app,"drawerSettings");
+            compare(guideButton.y,settingsButton.y);
+            guideButton.clicked();
+            var guide=findChild(app,"quickGuide"); tryCompare(guide,"opened",true);
+            compare(guide.y, app.SafeArea.margins.top + (app.height-app.SafeArea.margins.top-app.bottomInset-guide.height)/2);
+            tryCompare(drawer, "visible", false);
+            app.handleBack();
+        }
+        app.width=420; app.height=860;
+    }
+    function test_transcriptReservesScrollbarGutter() {
+        backend.messages=[{speaker:"You", isUser:true, timestamp:"12:00", content:"A long message ".repeat(200)}];
+        backend.transcriptChanged();
+        tryVerify(function(){return app.transcriptList.itemAtIndex(0)!==null;});
+        var item=app.transcriptList.itemAtIndex(0), bar=findChild(app,"transcriptBar");
+        verify(item.width + bar.width + 8 <= app.transcriptList.width + 0.1);
+    }
+    function test_dropdownBackKeepsOwningPage() {
+        app.selectedPage = 3;
+        var settingsCombo = findChild(app, "settingsCategory");
+        compare(settingsCombo.textAt(0), "Providers and models");
+        settingsCombo.popup.open(); tryCompare(settingsCombo.popup, "opened", true);
+        screenCapture.pressBack(app);
+        tryCompare(settingsCombo.popup, "visible", false);
+        compare(app.selectedPage, 3);
+        app.selectedPage = 1;
+        app.openDetails(3);
+        var detailsCombo = findChild(app, "detailsCategory");
+        compare(detailsCombo.textAt(3), "Usage and controls");
+        detailsCombo.popup.open(); tryCompare(detailsCombo.popup, "opened", true);
+        screenCapture.pressBack(app);
+        tryCompare(detailsCombo.popup, "visible", false);
+        verify(findChild(app, "detailsSheet").visible);
+        app.handleBack();
+    }
+    function test_pauseLabels() {
+        backend.phase = "Paused"; backend.stateChanged();
+        compare(app.sessionButtonLabel(), "Resume");
+        backend.phase = "Needs continuation"; backend.stateChanged();
+        compare(app.sessionButtonLabel(), "Continue");
+    }
+    function test_validTaskSubmitsOnce() {
+        backend.validTeam = true;
+        app.composer.text = "Plan this task";
+        app.submitComposer();
+        compare(backend.submissions, 1);
+        compare(app.composer.text, "");
+    }
+    function test_emptyTableAndWelcomeActions() {
+        var action = findChild(app, "emptyAction");
+        compare(action.text, "Add agent");
+        verify(action.visible);
+        backend.selectTable("");
+        compare(action.text, "Create table");
+        verify(action.visible);
+        verify(!findChild(app, "sessionAction").visible);
+    }
+    function test_unknownOutcomeHasNoReplayAction() {
+        backend.canResume = false;
+        backend.phase = "Paused";
+        backend.stateChanged();
+        compare(findChild(app, "sessionAction").text, "Create fresh table");
+        verify(findChild(app, "sessionAction").visible);
+        app.composer.text = "Keep this draft";
+        verify(!findChild(app, "sendTask").enabled);
+        app.submitComposer();
+        compare(app.composer.text, "Keep this draft");
+        app.handleBack();
+        app.activateSession();
+        var dialog = findChild(app, "recoveryDialog");
+        tryCompare(dialog, "visible", true);
+        findChild(app, "confirmRecovery").clicked();
+        compare(backend.copies, 1);
+        compare(app.drafts["fixture-table"], "Keep this draft");
+        compare(backend.submissions, 0);
+    }
+    function test_backClosesDialogBeforeSheet() {
+        app.openDetails(0);
+        app.openAddSeat();
+        var dialog = findChild(app, "agentDialog");
+        var sheet = findChild(app, "detailsSheet");
+        tryCompare(dialog, "visible", true);
+        screenCapture.pressBack(app);
+        tryCompare(dialog, "visible", false);
+        verify(sheet.visible);
+        screenCapture.pressBack(app);
+        tryCompare(sheet, "visible", false);
+    }
+    function test_backDismissesValidationDialog() {
+        app.composer.text = "Keep invalid task";
+        app.submitComposer();
+        var dialog = findChild(app, "validationDialog");
+        tryCompare(dialog, "visible", true);
+        screenCapture.pressBack(app);
+        tryCompare(dialog, "visible", false);
+        compare(app.composer.text, "Keep invalid task");
+        verify(app.visible);
+    }
+    function test_switchingTableClosesOldEditor() {
+        app.openAddSeat();
+        var dialog = findChild(app, "agentDialog");
+        tryCompare(dialog, "visible", true);
+        backend.selectTable("other-table");
+        tryCompare(dialog, "visible", false);
+    }
+    function test_switchingTableClosesOldArtifact() {
+        app.artifactPreviewTitle = "Origin artifact";
+        app.artifactPreviewBody = "Origin content";
+        app.openArtifact();
+        var dialog = findChild(app, "artifactPreview");
+        tryCompare(dialog, "visible", true);
+        backend.selectTable("other-table");
+        tryCompare(dialog, "visible", false);
+        compare(app.artifactPreviewBody, "");
+    }
+    function test_backClosesSheetBeforeDrawer() {
+        var drawer = findChild(app, "tableDrawer");
+        var sheet = findChild(app, "detailsSheet");
+        drawer.open(); app.openDetails(0);
+        wait(300);
+        screenCapture.pressBack(app);
+        tryCompare(sheet, "visible", false);
+        verify(drawer.visible);
+        screenCapture.pressBack(app);
+        tryCompare(drawer, "visible", false);
+    }
+    function test_screenCapture_data() {
+        return [
+            {tag:"phone-light", width:360, height:800, appearance:"Light", section:-1},
+            {tag:"phone-dark", width:412, height:915, appearance:"Dark", section:-1},
+            {tag:"conversation", width:412, height:915, appearance:"Light", section:-1},
+            {tag:"landscape", width:915, height:412, appearance:"Light", section:-1},
+            {tag:"tablet", width:800, height:1280, appearance:"Light", section:-1},
+            {tag:"wide", width:1366, height:768, appearance:"Light", section:0},
+            {tag:"welcome", width:412, height:915, appearance:"Light", section:-1},
+            {tag:"manual-pause", width:412, height:915, appearance:"Light", section:-1},
+            {tag:"hard-stop", width:412, height:915, appearance:"Light", section:-1},
+            {tag:"unknown-outcome", width:412, height:915, appearance:"Light", section:-1},
+            {tag:"running", width:412, height:915, appearance:"Light", section:-1},
+            {tag:"completed", width:412, height:915, appearance:"Light", section:-1},
+            {tag:"failed", width:412, height:915, appearance:"Light", section:-1},
+            {tag:"agent-editor", width:412, height:915, appearance:"Light", section:0},
+            {tag:"team", width:412, height:915, appearance:"Light", section:0},
+            {tag:"artifacts", width:412, height:915, appearance:"Light", section:1},
+            {tag:"activity", width:412, height:915, appearance:"Dark", section:2},
+            {tag:"usage", width:412, height:915, appearance:"Light", section:3},
+            {tag:"settings", width:412, height:915, appearance:"Light", section:4},
+            {tag:"appearance", width:412, height:915, appearance:"Light", section:4},
+            {tag:"quick-guide", width:412, height:915, appearance:"Light", section:-1},
+            {tag:"drawer", width:412, height:915, appearance:"Light", section:-1},
+            {tag:"table-actions", width:412, height:915, appearance:"Light", section:-1}
+        ];
+    }
+    function test_screenCapture(data) {
+        app.width = data.width; app.height = data.height;
+        backend.appearance = data.appearance; backend.settingsChanged();
+        if (data.tag === "welcome") backend.selectTable("");
+        if (data.tag === "team" || data.tag === "wide") {
+            backend.agents = [{occupied:true, displayName:"Maya", role:"Final Decision Maker", provider:"OpenAI", model:"Configured model", color:"#16866c", active:false}];
+            backend.seatsChanged();
+        }
+        if (data.tag === "manual-pause" || data.tag === "unknown-outcome" || data.tag === "hard-stop") {
+            backend.phase = data.tag === "hard-stop" ? "Needs continuation" : "Paused";
+            backend.canResume = data.tag !== "unknown-outcome";
+            backend.pauseReason = data.tag === "unknown-outcome" ? "The provider outcome is unknown. This operation cannot be replayed." : data.tag === "hard-stop" ? "The token limit paused Maya's next planning operation. Continue authorizes this operation only." : "Paused by you. Resume when ready.";
+        }
+        if (data.tag === "running") { backend.phase = "Planning"; backend.running = true; }
+        if (data.tag === "completed") backend.phase = "Completed";
+        if (data.tag === "failed") backend.phase = "Failed";
+        backend.stateChanged();
+        if (data.tag === "conversation") {
+            backend.messages = [
+                {speaker:"You", role:"", model:"", timestamp:"09:41", isUser:true, content:"Help me plan a small community garden.", color:"#626b64"},
+                {speaker:"Maya", role:"Planner", model:"Fixture model", timestamp:"09:42", isUser:false, content:"Start with the people and the space. I suggest three steps:\n\n1. Agree on a shared purpose and weekly responsibilities.\n2. Check sunlight, water access, and permission to use the site.\n3. Pilot two raised beds before expanding.\n\nThe next review can test this plan against your budget and available time.", color:"#16866c"},
+                {speaker:"Alex", role:"Quality control", model:"Fixture model", timestamp:"09:43", isUser:false, content:"One gap to resolve: who will water during holidays? Add a backup rota before buying materials.", color:"#8169b3"}
+            ];
+            backend.transcriptChanged();
+        }
+        if (data.section === 4) app.selectedPage = 3;
+        else if (data.section >= 0) app.openDetails(data.section);
+        if (data.tag === "agent-editor") app.openAddSeat();
+        if (data.tag === "appearance") app.selectedSettingsPage = 2;
+        if (data.tag === "quick-guide") app.openQuickGuide();
+        if (data.tag === "drawer") findChild(app, "tableDrawer").open();
+        if (data.tag === "table-actions") { findChild(app, "tableDrawer").open(); findChild(app, "tableActionsButton").clicked(); }
+        wait(350);
+        verify(app.visible);
+        verify(app.composer.height > 0);
+        if (typeof captureDirectory !== "undefined" && captureDirectory.length > 0) {
+            verify(screenCapture.capture(app, data.tag));
+        }
+        app.handleBack();
+        app.width = 420; app.height = 860;
+    }
+}

@@ -45,6 +45,13 @@ add_amt_test(test_controller test_controller.cpp)
 add_amt_test(test_provider_gateway test_provider_gateway.cpp)
 add_amt_test(test_startup_timeline test_startup_timeline.cpp)
 
+# Explicitly invoked measurement tool, not a timing-sensitive pass/fail test.
+add_executable(measure_mobile measure_mobile.cpp)
+target_link_libraries(measure_mobile PRIVATE AIMeetingTableTestCore Qt6::Gui)
+if(WIN32)
+    target_link_libraries(measure_mobile PRIVATE Psapi)
+endif()
+
 find_package(Java REQUIRED COMPONENTS Runtime Development)
 set(AMT_ATTACHMENT_JAVA_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/attachment-java-test-classes")
 add_test(
@@ -59,17 +66,25 @@ add_test(
 )
 set_tests_properties(test_attachment_import_java PROPERTIES TIMEOUT 120)
 
-add_executable(test_qml test_qml.cpp)
-target_link_libraries(test_qml PRIVATE Qt6::QuickTest)
+add_executable(test_qml test_qml.cpp ${PROJECT_SOURCE_DIR}/resources.qrc)
+target_link_libraries(test_qml PRIVATE Qt6::QuickTest Qt6::Quick)
 target_compile_definitions(test_qml PRIVATE
     AMT_QML_TEST_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/qml/tst_transcript_scroll.qml.in"
     AMT_TRANSCRIPT_SCROLL_SOURCE="${PROJECT_SOURCE_DIR}/qml/TranscriptScroll.js"
+    AMT_QML_DIRECTORY="${PROJECT_SOURCE_DIR}/qml"
+    AMT_MOBILE_TEST_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/qml/tst_mobile.qml.in"
+    AMT_PERFORMANCE_TEST_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/qml/tst_performance.qml.in"
+    AMT_BRAND_IMAGE="${PROJECT_SOURCE_DIR}/branding/synsemble.png"
+    AMT_BRAND_LIGHT_IMAGE="${PROJECT_SOURCE_DIR}/branding/synsemble-light.png"
 )
-add_test(NAME test_qml COMMAND test_qml)
+add_test(NAME test_qml COMMAND test_qml -o "${CMAKE_CURRENT_BINARY_DIR}/qml-test-results.txt,txt")
 set_tests_properties(test_qml PROPERTIES
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
+if(WIN32)
+    set_tests_properties(test_qml PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_QUICK_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Material;QT_SCALE_FACTOR=1")
+endif()
 
 add_test(
     NAME test_source_hygiene
