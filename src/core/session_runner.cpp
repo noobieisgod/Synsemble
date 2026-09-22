@@ -144,6 +144,7 @@ SessionRunner::SessionRunner(EventBus *eventBus,
 
 void SessionRunner::startSession(SessionState &state)
 {
+    if (state.continuationCommand.payload.value("outcomeUnknown").toBool()) return;
     m_runGenerations.insert(state.tableId, m_runGenerations.value(state.tableId) + 1);
     state.elapsedSeconds = 0;
     state.phaseElapsedSeconds = 0;
@@ -220,6 +221,7 @@ void SessionRunner::requestPause(SessionState &state)
 
 void SessionRunner::resumeSession(SessionState &state)
 {
+    if (state.continuationCommand.payload.value("outcomeUnknown").toBool()) return;
     if (state.phase == Phase::Stopped || state.phase == Phase::Completed || state.phase == Phase::Failed) {
         return;
     }
@@ -264,6 +266,8 @@ void SessionRunner::resumeSession(SessionState &state)
 
 void SessionRunner::stopSession(SessionState &state, const QString &reason)
 {
+    const bool outcomeUnknown = state.continuationCommand.payload.value("outcomeUnknown").toBool()
+        || state.continuationCommand.payload.value("requestInFlight").toBool();
     m_continuationAllowances.remove(state.tableId);
     clearContinuationState(state);
     WorkflowCommand command;
@@ -275,6 +279,11 @@ void SessionRunner::stopSession(SessionState &state, const QString &reason)
     }
     state.phase = Phase::Stopped;
     executeCommand(state, command);
+    if (outcomeUnknown) {
+        state.continuationCommand.payload.insert("outcomeUnknown", true);
+        state.continuationReason = "Stopped with unconfirmed provider work. This operation cannot be replayed.";
+        emit sessionStateChanged(state);
+    }
     updateElapsedTimerState();
 }
 
@@ -426,6 +435,9 @@ void SessionRunner::executeCommand(SessionState &state, const WorkflowCommand &c
                                         false)) {
                 state.pendingResearchResponses += 1;
                 dispatchedResearchRequests += 1;
+            } else if (state.paused) {
+                updateElapsedTimerState();
+                return;
             }
         }
         m_researchRequestsBySession.insert(state.tableId, dispatchedResearchRequests);
@@ -546,7 +558,6 @@ void SessionRunner::onProviderResponse(const ProviderResponse &response)
         return;
     }
     const PendingRequestContext requestContext = pendingIt.value();
-    m_pendingRequests.erase(pendingIt);
 
     if (response.sessionId != requestContext.sessionId
         || response.seatId != requestContext.seatId
@@ -573,6 +584,11 @@ void SessionRunner::onProviderResponse(const ProviderResponse &response)
         return;
     }
 
+    m_pendingRequests.erase(pendingIt);
+
+    if (reservedTokensInFlight(session.tableId) == 0)
+        session.continuationCommand.payload.remove("requestInFlight");
+
     if (!response.attachmentProviderHandles.isEmpty()) {
         for (auto &attachment : session.attachments) {
             const QJsonValue handleValue = response.attachmentProviderHandles.value(attachment.attachmentId);
@@ -583,6 +599,24 @@ void SessionRunner::onProviderResponse(const ProviderResponse &response)
     }
 
     const bool invalidVisibleContent = response.success && response.content.trimmed().isEmpty();
+    if (response.deliveryOutcome == ProviderDeliveryOutcome::OutcomeUnknown) {
+        // Persist a non-executable marker in the existing continuation JSON, including across restart.
+        discardSession(session.tableId);
+        session.continuationCommand = {};
+        session.continuationCommand.sessionId = session.tableId;
+        session.continuationCommand.payload.insert("outcomeUnknown", true);
+        session.continuationPending = false;
+        session.continuationReason = QString("%1 (%2): %3 This operation cannot be replayed.")
+            .arg(seat.displayName, providerKindToString(seat.provider), response.errorMessage);
+        session.pausedResumePhase = session.phase;
+        session.phase = Phase::Paused;
+        session.paused = true;
+        session.pauseRequested = false;
+        session.waitingForNextTurn = false;
+        appendLog(session, LogEventType::ProviderCallFailed, seat.seatId, seat.displayName, session.continuationReason);
+        emit sessionStateChanged(session);
+        return;
+    }
     if (!response.success || invalidVisibleContent) {
         const QString errorMessage = invalidVisibleContent
             ? QString("%1 returned no user-visible assistant text.").arg(toString(seat.provider))
@@ -597,7 +631,8 @@ void SessionRunner::onProviderResponse(const ProviderResponse &response)
                                         response.outputTokens,
                                         response.usedTokens);
         }
-        appendLog(session, LogEventType::ProviderCallFailed, seat.seatId, seat.displayName, errorMessage);
+        appendLog(session, LogEventType::ProviderCallFailed, seat.seatId, seat.displayName,
+                  QString("%1: %2").arg(providerKindToString(seat.provider), errorMessage));
         if (session.phase == Phase::Research && session.pendingResearchResponses > 0) {
             session.pauseRequested = session.pauseRequested || malformedContent
                 || response.deliveryOutcome == ProviderDeliveryOutcome::OutcomeUnknown;
@@ -620,7 +655,10 @@ void SessionRunner::onProviderResponse(const ProviderResponse &response)
             if (!requestMode.isEmpty()) {
                 retry.payload.insert("mode", requestMode);
             }
+            retry.payload.insert("responseRejected", true);
+            session.continuationReason = errorMessage;
             m_delayedCommands.insert(session.tableId, retry);
+            session.continuationCommand = retry;
             session.activeSeatId.clear();
             session.waitingForNextTurn = false;
             session.paused = true;
@@ -948,6 +986,30 @@ bool SessionRunner::dispatchProviderRequest(SessionState &state,
     requestContext.reservedTokens = m_budgetManager->tokenReserve(state);
     requestContext.runGeneration = request.runGeneration;
     m_pendingRequests.insert(request.requestId, requestContext);
+    // Persist before transport. A crash after this point must never offer replay.
+    state.continuationCommand.payload.insert("requestInFlight", true);
+    if (m_checkpoint && !m_checkpoint(state)) {
+        m_pendingRequests.remove(request.requestId);
+        const bool otherRequestsInFlight = reservedTokensInFlight(state.tableId) > 0;
+        discardSession(state.tableId);
+        state.continuationCommand = resumeCommand ? *resumeCommand
+            : WorkflowCommand{RunnerCommandType::StartPhase, state.tableId, state.phase, {}, {}};
+        if (otherRequestsInFlight) {
+            state.continuationCommand = {};
+            state.continuationCommand.payload.insert("outcomeUnknown", true);
+        }
+        state.continuationReason = otherRequestsInFlight
+            ? "Storage failed while provider work was in flight. Its outcome is unknown and cannot be replayed."
+            : "Could not save the session. No request was sent. Restore available storage before resuming.";
+        state.pausedResumePhase = state.phase;
+        state.phase = Phase::Paused;
+        state.paused = true;
+        state.pauseRequested = false;
+        state.waitingForNextTurn = false;
+        appendLog(state, LogEventType::ProviderCallFailed, seat.seatId, seat.displayName, state.continuationReason);
+        emit sessionStateChanged(state);
+        return false;
+    }
     m_continuationAllowances.remove(state.tableId);
     emit sessionStateChanged(state);
     m_providerGateway->sendAsync(request);
@@ -964,6 +1026,7 @@ void SessionRunner::queueNextCommand(SessionState &state, const WorkflowCommand 
     if (command.commandType == RunnerCommandType::RequestSeatTurn
         || command.commandType == RunnerCommandType::RequestDecision) {
         m_delayedCommands.insert(state.tableId, command);
+        state.continuationCommand = command;
         if (state.pauseRequested || state.paused) {
             state.paused = true;
             state.pauseRequested = false;
@@ -995,6 +1058,7 @@ void SessionRunner::queueNextCommand(SessionState &state, const WorkflowCommand 
                 return;
             }
             handle->waitingForNextTurn = false;
+            handle->continuationCommand = {};
             emit sessionStateChanged(*handle);
             executeCommand(*handle, command);
         });

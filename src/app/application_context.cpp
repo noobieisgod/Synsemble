@@ -31,6 +31,9 @@ ApplicationContext::ApplicationContext(QObject *parent)
                       this)
 {
     m_providerGateway.setCredentialStore(&m_credentialStore);
+    m_sessionRunner.setCheckpoint([this](const SessionState &state) {
+        return m_databaseManager.saveTable(state);
+    });
     StartupTimeline::instance().mark(StartupStage::ApplicationContextConstruction);
 }
 
@@ -52,12 +55,37 @@ bool ApplicationContext::initialize()
         return false;
     }
 
-    const auto loadedTables = m_databaseManager.loadTables();
+    bool restored = false;
+    const auto loadedTables = m_databaseManager.loadTables(&restored);
+    if (!restored) {
+        // Never treat a failed restore as an empty database or clean up its files.
+        return false;
+    }
     m_tables.clear();
     for (const auto &table : loadedTables) {
         auto handle = std::make_shared<SessionState>(table);
         applyEffectiveBudgetPolicy(*handle);
-        const bool restoreWarningAdded = validateRestoredArtifacts(*handle);
+        bool restoreWarningAdded = validateRestoredArtifacts(*handle);
+        const bool interruptedRequest = handle->continuationCommand.payload.value("requestInFlight").toBool();
+        if (interruptedRequest || isRunningPhase(handle->phase)) {
+            const bool safePendingCommand = !interruptedRequest
+                && handle->continuationCommand.commandType != RunnerCommandType::None
+                && handle->continuationCommand.sessionId == handle->tableId;
+            handle->pausedResumePhase = handle->phase;
+            handle->phase = Phase::Paused;
+            handle->paused = true;
+            handle->waitingForNextTurn = false;
+            handle->pendingResearchResponses = 0;
+            if (safePendingCommand) {
+                handle->continuationReason = "The app restarted. Resume the pending operation when ready.";
+            } else {
+                handle->continuationCommand = {};
+                handle->continuationCommand.payload.insert("outcomeUnknown", true);
+                handle->continuationPending = false;
+                handle->continuationReason = "The app closed during provider work. Its outcome is unknown and cannot be replayed.";
+            }
+            restoreWarningAdded = true;
+        }
         m_tables.append(handle);
         if (restoreWarningAdded) {
             save(*handle);
@@ -65,12 +93,6 @@ bool ApplicationContext::initialize()
     }
     cleanupUnownedAttachmentFiles();
     qCDebug(diagnosticsLog).noquote() << QString("Persistence restore: loaded tables=%1").arg(m_tables.size());
-    if (m_tables.isEmpty()) {
-        auto sample = std::make_shared<SessionState>(createSampleTable());
-        m_tables.append(sample);
-        save(*sample);
-        qCDebug(diagnosticsLog) << "Persistence restore: created initial table";
-    }
     applyTheme();
     return true;
 }
@@ -89,7 +111,7 @@ SessionState ApplicationContext::createSampleTable() const
 {
     SessionState state;
     state.tableId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    state.title = "New Meeting Table";
+    state.title = "New table";
     state.updatedAt = QDateTime::currentDateTimeUtc();
     state.phase = Phase::Idle;
     state.round = 1;
@@ -226,9 +248,8 @@ void ApplicationContext::cleanupUnownedAttachmentFiles() const
     const QFileInfoList entries = root.entryInfoList(QDir::Files | QDir::NoDotAndDotDot);
     for (const QFileInfo &entry : entries) {
         const QString canonicalPath = entry.canonicalFilePath();
-        const bool isPartial = entry.fileName().endsWith(".part");
         const bool isOwned = !canonicalPath.isEmpty() && referenced.contains(canonicalPath);
-        if (!isPartial && isOwned) {
+        if (isOwned) {
             continue;
         }
         if (!QFile::remove(entry.absoluteFilePath())) {

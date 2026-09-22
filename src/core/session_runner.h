@@ -36,6 +36,7 @@ public:
                   QObject *parent = nullptr);
 
     void startSession(SessionState &state);
+    void setCheckpoint(std::function<bool(const SessionState &)> checkpoint) { m_checkpoint = std::move(checkpoint); }
     void requestPause(SessionState &state);
     void resumeSession(SessionState &state);
     void stopSession(SessionState &state, const QString &reason = {});
@@ -88,6 +89,7 @@ private:
     BudgetManager *m_budgetManager;
     ArtifactManager *m_artifactManager;
     SessionResolver m_sessionResolver;
+    std::function<bool(const SessionState &)> m_checkpoint;
     QHash<QString, PendingRequestContext> m_pendingRequests;
     QHash<QString, int> m_researchRequestsBySession;
     QHash<QString, int> m_researchFailuresBySession;

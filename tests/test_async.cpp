@@ -5,6 +5,8 @@
 #include <QFile>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QTemporaryDir>
+#include "persistence/database_manager.h"
 
 #include "core/event_bus.h"
 #include "core/session_runner.h"
@@ -31,6 +33,7 @@ public:
 std::shared_ptr<SessionState> makeSession(Phase phase) {
   auto state = std::make_shared<SessionState>();
   state->tableId = "session";
+  state->updatedAt = QDateTime::currentDateTimeUtc();
   state->phase = phase;
   state->round = 1;
 
@@ -78,19 +81,122 @@ private slots:
   void presentProceedAliasCompletesOnce();
   void outcomeUnknownDoesNotRecordConfirmedUsage();
   void malformedOutputPausesAndPreservesSession();
+  void rejectedResearchStopsWithoutUnknownLock();
   void supportedHardStopsPauseBeforeDispatch_data();
   void supportedHardStopsPauseBeforeDispatch();
   void hardStopBeforeDispatchResumesOnce();
   void postResponseOvershootPausesNextOperation();
   void restoredContinuationResumesWithoutReplay();
+  void checkpointPreventsUnrecordedDispatch();
+  void manualPauseRestoresExactPendingCommand();
   void convergencePromptsPreserveArtifactAuthority();
   void convergenceFixtureCompletesAfterOneTargetedRevision();
 };
+
+void AsyncTests::rejectedResearchStopsWithoutUnknownLock() {
+  auto state = makeSession(Phase::Research);
+  EventBus bus; WorkflowEngine workflow; FakeProviderGateway gateway;
+  BudgetManager budget; ArtifactManager artifacts;
+  SessionRunner runner(&bus, &workflow, &gateway, &budget, &artifacts,
+      [state](const QString &id) { return id == state->tableId ? state : nullptr; });
+  runner.executeCommand(*state, {RunnerCommandType::RunResearchBatch, state->tableId, Phase::Research, {}, {}});
+  QVERIFY(!gateway.requests.isEmpty());
+  const auto requests = gateway.requests;
+  for (const auto &request : requests) {
+    auto failure = responseFor(request, {}, {});
+    failure.success = false; failure.deliveryOutcome = ProviderDeliveryOutcome::DefiniteFailure;
+    failure.errorMessage = "Authentication rejected (HTTP 401).";
+    gateway.responseReady(failure);
+  }
+  QCOMPARE(int(state->phase), int(Phase::Stopped));
+  QVERIFY(!state->continuationCommand.payload.value("outcomeUnknown").toBool());
+  QCOMPARE(gateway.requests.size(), requests.size());
+  QVERIFY(std::any_of(state->log.cbegin(), state->log.cend(), [](const LogEvent &event) {
+    return !event.actorName.isEmpty() && event.summary.contains("OpenAI") && event.summary.contains("401");
+  }));
+}
 
 void AsyncTests::initTestCase() {
   QStandardPaths::setTestModeEnabled(true);
   QCoreApplication::setOrganizationName("Synsemble Tests");
   QCoreApplication::setApplicationName("Async Tests");
+}
+
+void AsyncTests::checkpointPreventsUnrecordedDispatch() {
+  auto state = makeSession(Phase::Planning);
+  EventBus bus;
+  WorkflowEngine workflow;
+  FakeProviderGateway gateway;
+  BudgetManager budget;
+  ArtifactManager artifacts;
+  SessionRunner runner(&bus, &workflow, &gateway, &budget, &artifacts,
+      [state](const QString &id) { return id == state->tableId ? state : nullptr; });
+  bool durable = false;
+  SessionState checkpoint;
+  runner.setCheckpoint([&](const SessionState &value) { checkpoint = value; return durable; });
+  WorkflowCommand command{RunnerCommandType::RequestSeatTurn, state->tableId,
+                          Phase::Planning, "seat-participant", {}};
+  runner.executeCommand(*state, command);
+  QVERIFY(gateway.requests.isEmpty());
+  QVERIFY(state->paused);
+  QCOMPARE(state->continuationCommand.targetSeatId, command.targetSeatId);
+  durable = true;
+  runner.resumeSession(*state);
+  QCOMPARE(gateway.requests.size(), 1);
+  QVERIFY(checkpoint.continuationCommand.payload.value("requestInFlight").toBool());
+  auto response = responseFor(gateway.requests.first(), {}, "Visible fixture response");
+  auto misrouted = response;
+  misrouted.sessionId = "another-table";
+  gateway.responseReady(misrouted);
+  QVERIFY(state->transcript.isEmpty());
+  gateway.responseReady(response);
+  QCOMPARE(state->transcript.size(), 1);
+  gateway.responseReady(response);
+  QCOMPARE(state->transcript.size(), 1);
+}
+
+void AsyncTests::manualPauseRestoresExactPendingCommand() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  DatabaseManager database(directory.filePath("pause.db"), "pause-checkpoint");
+  QVERIFY(database.initialize());
+  auto state = makeSession(Phase::Planning);
+  EventBus bus;
+  WorkflowEngine workflow;
+  BudgetManager budget;
+  ArtifactManager artifacts;
+  QString pendingSeat;
+  RunnerCommandType pendingType;
+  {
+    FakeProviderGateway gateway;
+    SessionRunner runner(&bus, &workflow, &gateway, &budget, &artifacts,
+        [state](const QString &id) { return id == state->tableId ? state : nullptr; });
+    WorkflowCommand command{RunnerCommandType::RequestSeatTurn, state->tableId,
+                            Phase::Planning, "seat-participant", {}};
+    runner.executeCommand(*state, command);
+    QCOMPARE(gateway.requests.size(), 1);
+    gateway.responseReady(responseFor(gateway.requests.first(), {}, "Completed exactly once"));
+    runner.requestPause(*state);
+    QCOMPARE(static_cast<int>(state->phase), static_cast<int>(Phase::Paused));
+    QVERIFY(!state->continuationPending);
+    pendingType = state->continuationCommand.commandType;
+    pendingSeat = state->continuationCommand.targetSeatId;
+    QVERIFY(pendingType != RunnerCommandType::None);
+    QVERIFY(database.saveTable(*state));
+  }
+  const auto restored = database.loadTables();
+  QCOMPARE(restored.size(), 1);
+  state = std::make_shared<SessionState>(restored.first());
+  FakeProviderGateway gateway;
+  SessionRunner runner(&bus, &workflow, &gateway, &budget, &artifacts,
+      [state](const QString &id) { return id == state->tableId ? state : nullptr; });
+  QCOMPARE(state->continuationCommand.commandType, pendingType);
+  runner.resumeSession(*state);
+  QCOMPARE(gateway.requests.size(), 1);
+  QCOMPARE(gateway.requests.first().seatId, pendingSeat);
+  QCOMPARE(state->transcript.size(), 1);
+  runner.resumeSession(*state);
+  QCOMPARE(gateway.requests.size(), 1);
 }
 
 void AsyncTests::unknownAndGenerationStaleResponsesAreRejected() {
@@ -332,6 +438,10 @@ void AsyncTests::outcomeUnknownDoesNotRecordConfirmedUsage() {
   runner.executeCommand(*state, turn);
   QCOMPARE(gateway.requests.size(), 1);
 
+  turn.targetSeatId = "seat-fdm";
+  runner.executeCommand(*state, turn);
+  QCOMPARE(gateway.requests.size(), 2);
+
   ProviderResponse unknown;
   unknown.requestId = gateway.requests.first().requestId;
   unknown.sessionId = state->tableId;
@@ -353,13 +463,29 @@ void AsyncTests::outcomeUnknownDoesNotRecordConfirmedUsage() {
                             "could duplicate provider work or usage");
                       }));
 
+  const auto transcriptCount = state->transcript.size();
+  ProviderResponse late;
+  late.requestId = gateway.requests.last().requestId;
+  late.sessionId = state->tableId;
+  late.seatId = "seat-fdm";
+  late.runGeneration = gateway.requests.last().runGeneration;
+  late.content = "Late response must not mutate the paused session";
+  late.usedTokens = 100;
+  gateway.responseReady(late);
+  QCOMPARE(state->transcript.size(), transcriptCount);
+  QCOMPARE(state->usedTokens, 11);
+
   runner.resumeSession(*state);
   QCOMPARE(gateway.requests.size(), 2);
-  ProviderResponse success =
-      responseFor(gateway.requests.last(), {}, "Confirmed response");
-  success.usedTokens = 7;
-  gateway.responseReady(success);
-  QCOMPARE(state->usedTokens, 18);
+  QVERIFY(state->continuationCommand.payload.value("outcomeUnknown").toBool());
+  runner.startSession(*state);
+  QCOMPARE(gateway.requests.size(), 2);
+  QCOMPARE(state->usedTokens, 11);
+  runner.stopSession(*state);
+  runner.startSession(*state);
+  runner.resumeSession(*state);
+  QCOMPARE(gateway.requests.size(), 2);
+  QVERIFY(state->continuationCommand.payload.value("outcomeUnknown").toBool());
 }
 
 void AsyncTests::malformedOutputPausesAndPreservesSession() {
