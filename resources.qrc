@@ -1,5 +1,13 @@
 <RCC>
   <qresource prefix="/branding">
-    <file alias="icon_logo.png">Icon Logo.png</file>
+    <file alias="icon_logo.png">branding/synsemble.png</file>
+    <file alias="icon_light.png">branding/synsemble-light.png</file>
+  </qresource>
+  <qresource prefix="/fonts">
+    <file alias="Inter.ttf">branding/fonts/Inter.ttf</file>
+    <file alias="JetBrainsMono-Regular.ttf">branding/fonts/JetBrainsMono-Regular.ttf</file>
+    <file alias="JetBrainsMono-Bold.ttf">branding/fonts/JetBrainsMono-Bold.ttf</file>
+    <file alias="Inter-OFL.txt">branding/fonts/Inter-OFL.txt</file>
+    <file alias="JetBrainsMono-OFL.txt">branding/fonts/JetBrainsMono-OFL.txt</file>
   </qresource>
 </RCC>
