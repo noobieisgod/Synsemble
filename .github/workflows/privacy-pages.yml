@@ -1,0 +1,45 @@
+name: Deploy Synsemble privacy site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/index.html
+      - .github/workflows/privacy-pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Stage only the public privacy page
+        run: |
+          mkdir -p "$RUNNER_TEMP/privacy-site"
+          cp docs/index.html "$RUNNER_TEMP/privacy-site/index.html"
+          touch "$RUNNER_TEMP/privacy-site/.nojekyll"
+      - name: Configure Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b
+      - name: Upload privacy site only
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
+        with:
+          path: ${{ runner.temp }}/privacy-site
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128
