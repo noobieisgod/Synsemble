@@ -7,6 +7,7 @@
 #include <QNetworkReply>
 #include <QQueue>
 #include <QSignalSpy>
+#include <QSslError>
 #include <QTimer>
 
 #include <algorithm>
@@ -23,6 +24,7 @@ struct ReplyPlan {
   int statusCode = 200;
   QNetworkReply::NetworkError error = QNetworkReply::NoError;
   int delayMs = 0;
+  QSslError::SslError tlsError = QSslError::NoError;
 };
 
 class FakeReply final : public QNetworkReply {
@@ -70,6 +72,7 @@ private:
       return;
     }
     m_completed = true;
+    if (m_plan.tlsError != QSslError::NoError) emit sslErrors({QSslError(m_plan.tlsError)});
     setAttribute(QNetworkRequest::HttpStatusCodeAttribute, m_plan.statusCode);
     if (m_plan.error != QNetworkReply::NoError) {
       setError(m_plan.error, "sensitive transport detail must not escape");
@@ -140,6 +143,10 @@ class ModelCatalogTests final : public QObject {
 private slots:
   void overlappingRefreshUsesNewestGenerationAndRetainsLastGood();
   void credentialsLoadOncePerProviderAndTimeoutCompletes();
+  void providerRefreshIsIndependent();
+  void safeFailureMessages_data();
+  void safeFailureMessages();
+  void tlsCertificateCategoryIsSafe();
 };
 
 void ModelCatalogTests::
@@ -204,6 +211,64 @@ void ModelCatalogTests::credentialsLoadOncePerProviderAndTimeoutCompletes() {
   QCOMPARE(loads.value(ProviderKind::Anthropic), 1);
   QVERIFY(
       openAiStatus(manager).value("message").toString().contains("timeout"));
+}
+
+void ModelCatalogTests::providerRefreshIsIndependent() {
+  FakeNetworkAccessManager network;
+  network.enqueue({openAiModels({"gpt-scoped"}), 200, QNetworkReply::NoError, 30});
+  network.enqueue({R"({"data":[{"id":"claude-fixture","display_name":"Fixture"}]})", 200, QNetworkReply::NoError, 0});
+  QMap<ProviderKind, int> loads;
+  ModelCatalogManager manager([&loads](ProviderKind provider) { ++loads[provider]; return QString("fixture-key"); }, &network, 1000);
+  QSignalSpy statuses(&manager, &ModelCatalogManager::statusesChanged);
+  manager.fetchModelsAsync(ProviderKind::OpenAI);
+  QVERIFY(openAiStatus(manager).value("refreshing").toBool());
+  manager.fetchModelsAsync(ProviderKind::OpenAI);
+  manager.fetchModelsAsync(ProviderKind::Anthropic);
+  QCOMPARE(loads.value(ProviderKind::OpenAI), 1);
+  QCOMPARE(loads.value(ProviderKind::Anthropic), 1);
+  QCOMPARE(loads.value(ProviderKind::Gemini), 0);
+  QTRY_VERIFY(!openAiStatus(manager).value("refreshing").toBool());
+  QCOMPARE(modelCount(manager.catalogForProvider(ProviderKind::OpenAI), "gpt-scoped"), 1);
+  QCOMPARE(modelCount(manager.catalogForProvider(ProviderKind::Anthropic), "claude-fixture"), 1);
+  QVERIFY(statuses.count() >= 4);
+}
+
+void ModelCatalogTests::safeFailureMessages_data() {
+  QTest::addColumn<int>("code");
+  QTest::addColumn<int>("http");
+  QTest::addColumn<QString>("expected");
+  QTest::newRow("TLS") << int(QNetworkReply::SslHandshakeFailedError) << 0 << QString("saved key was not validated");
+  QTest::newRow("unauthorized") << int(QNetworkReply::AuthenticationRequiredError) << 401 << QString("authentication rejected");
+  QTest::newRow("forbidden") << int(QNetworkReply::ContentAccessDenied) << 403 << QString("permissions");
+  QTest::newRow("quota") << int(QNetworkReply::UnknownContentError) << 429 << QString("rate limit or quota");
+  QTest::newRow("DNS") << int(QNetworkReply::HostNotFoundError) << 0 << QString("DNS/network");
+  QTest::newRow("timeout") << int(QNetworkReply::TimeoutError) << 0 << QString("timeout");
+}
+void ModelCatalogTests::safeFailureMessages() {
+  QFETCH(int, code); QFETCH(int, http); QFETCH(QString, expected);
+  FakeNetworkAccessManager network;
+  network.enqueue({"private response", http, QNetworkReply::NetworkError(code), 0});
+  ModelCatalogManager manager([](ProviderKind) { return QString("fixture-key"); }, &network, 1000);
+  manager.fetchModelsAsync(ProviderKind::OpenAI);
+  QTRY_VERIFY(!openAiStatus(manager).value("refreshing").toBool());
+  const auto status = openAiStatus(manager);
+  const auto message = status.value("message").toString();
+  QVERIFY2(message.contains(expected), qPrintable(message));
+  QVERIFY(status.value("fallback").toBool());
+  QVERIFY(!message.contains("private response"));
+  QVERIFY(!message.contains("sensitive transport detail"));
+  QVERIFY(!message.contains("fixture-key"));
+}
+
+void ModelCatalogTests::tlsCertificateCategoryIsSafe() {
+  FakeNetworkAccessManager network;
+  network.enqueue({"private certificate response", 0, QNetworkReply::SslHandshakeFailedError, 0, QSslError::CertificateExpired});
+  ModelCatalogManager manager([](ProviderKind) { return QString("fixture-key"); }, &network, 1000);
+  manager.fetchModelsAsync(ProviderKind::OpenAI);
+  QTRY_VERIFY(!openAiStatus(manager).value("refreshing").toBool());
+  const auto message = openAiStatus(manager).value("message").toString();
+  QVERIFY(message.contains("certificate expired"));
+  QVERIFY(!message.contains("private certificate"));
 }
 
 QTEST_GUILESS_MAIN(ModelCatalogTests)

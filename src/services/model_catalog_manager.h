@@ -28,11 +28,13 @@ public:
                       int requestTimeoutMs, QObject *parent = nullptr);
 
   void fetchModelsAsync();
+  void fetchModelsAsync(ProviderKind provider);
   QVector<ModelCatalogEntry> catalogForProvider(ProviderKind provider) const;
   QVariantList fetchStatuses() const;
 
 signals:
   void fetchCompleted();
+  void statusesChanged();
 
 private:
   void fetchOpenAI(const QString &apiKey, quint64 generation);
@@ -42,7 +44,8 @@ private:
                  bool fallback = false);
   void setFailureStatus(ProviderKind provider, const QString &providerName,
                         const QString &reason);
-  void checkCompletion(quint64 generation);
+  void checkCompletion(ProviderKind provider, quint64 generation);
+  void beginRefresh(ProviderKind provider);
   void cancelActiveReplies();
 
   CredentialLoader m_credentialLoader;
@@ -53,7 +56,8 @@ private:
   QMap<ProviderKind, QString> m_statusMessages;
   QMap<ProviderKind, bool> m_statusSuccess;
   QMap<ProviderKind, bool> m_statusFallback;
-  int m_pendingRequests = 0;
+  QSet<ProviderKind> m_refreshing;
+  QMap<ProviderKind, quint64> m_generations;
   int m_requestTimeoutMs = 90000;
   quint64 m_generation = 0;
 };

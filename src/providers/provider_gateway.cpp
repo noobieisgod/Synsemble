@@ -1,4 +1,5 @@
 #include "providers/provider_gateway.h"
+#include "providers/network_diagnostics.h"
 
 #include <functional>
 
@@ -30,6 +31,8 @@ struct NetworkResult {
     QString error;
     int networkErrorCode = 0;
     int sslErrorCount = 0;
+    QString tlsCategory;
+    bool requestSent = false;
     QList<QNetworkReply::RawHeaderPair> headers;
     ProviderDeliveryOutcome deliveryOutcome = ProviderDeliveryOutcome::DefiniteFailure;
 };
@@ -42,7 +45,54 @@ void captureSslErrors(QNetworkReply *reply, NetworkResult *result)
 {
     QObject::connect(reply, &QNetworkReply::sslErrors, reply, [result](const QList<QSslError> &errors) {
         result->sslErrorCount += static_cast<int>(errors.size());
+        result->tlsCategory = tlsFailureCategory(errors);
     });
+}
+
+// HTTP rejections take precedence over Qt's corresponding network-error enum.
+ProviderDeliveryOutcome classifyDelivery(const NetworkResult &result, bool generationPost)
+{
+    if (result.statusCode >= 200 && result.statusCode < 300 && result.error.isEmpty())
+        return ProviderDeliveryOutcome::Succeeded;
+    if (!generationPost) return ProviderDeliveryOutcome::DefiniteFailure;
+    switch (result.statusCode) {
+    case 400: case 401: case 403: case 404: case 413: case 422: case 429:
+        return ProviderDeliveryOutcome::DefiniteFailure;
+    }
+    if (!result.requestSent && result.statusCode == 0) {
+        switch (result.networkErrorCode) {
+        case QNetworkReply::HostNotFoundError:
+        case QNetworkReply::ConnectionRefusedError:
+        case QNetworkReply::SslHandshakeFailedError:
+            return ProviderDeliveryOutcome::DefiniteFailure;
+        case QNetworkReply::OperationCanceledError:
+            return result.error == "timeout" ? ProviderDeliveryOutcome::OutcomeUnknown
+                                             : ProviderDeliveryOutcome::Cancelled;
+        }
+    }
+    return ProviderDeliveryOutcome::OutcomeUnknown;
+}
+
+QString safeFailureDetail(const NetworkResult &result)
+{
+    switch (result.statusCode) {
+    case 400: case 422: return "request rejected; check model and task configuration";
+    case 401: return "authentication rejected; replace the saved provider key";
+    case 403: return "access denied; check provider and model permissions";
+    case 404: return "model or endpoint unavailable; check the selected model";
+    case 413: return "request too large; reduce task or attachment size";
+    case 429: return "rate limit or quota reached; check provider limits before another run";
+    }
+    if (result.error == "timeout") return "connection timed out";
+    switch (result.networkErrorCode) {
+    case QNetworkReply::SslHandshakeFailedError:
+        return "TLS connection failed" + (result.tlsCategory.isEmpty() ? QString{} : ": " + result.tlsCategory);
+    case QNetworkReply::HostNotFoundError: return "server address could not be resolved; check DNS/network";
+    case QNetworkReply::ConnectionRefusedError: return "connection refused; check network access";
+    case QNetworkReply::OperationCanceledError: return "request interrupted";
+    case QNetworkReply::RemoteHostClosedError: return "connection closed before a complete response";
+    default: return result.statusCode >= 500 ? "server or proxy failure" : "unconfirmed network response";
+    }
 }
 
 NetworkResult performJsonRequest(QNetworkAccessManager &manager,
@@ -55,11 +105,13 @@ NetworkResult performJsonRequest(QNetworkAccessManager &manager,
         return handler(request, body, method);
     }
 
+    QNetworkRequest safeRequest(request);
+    safeRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
     QNetworkReply *reply = nullptr;
     if (method == "POST") {
-        reply = manager.post(request, body);
+        reply = manager.post(safeRequest, body);
     } else {
-        reply = manager.sendCustomRequest(request, method, body);
+        reply = manager.sendCustomRequest(safeRequest, method, body);
     }
 
     QEventLoop loop;
@@ -72,6 +124,7 @@ NetworkResult performJsonRequest(QNetworkAccessManager &manager,
     });
     NetworkResult result;
     captureSslErrors(reply, &result);
+    QObject::connect(reply, &QNetworkReply::requestSent, reply, [&result]() { result.requestSent = true; });
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     timeoutTimer.start(90000);
     loop.exec();
@@ -84,18 +137,8 @@ NetworkResult performJsonRequest(QNetworkAccessManager &manager,
         result.error = timedOut
             ? "timeout"
             : "network";
-        if (!timedOut && reply->error() == QNetworkReply::OperationCanceledError) {
-            result.deliveryOutcome = ProviderDeliveryOutcome::Cancelled;
-        } else if (method == "POST") {
-            result.deliveryOutcome = ProviderDeliveryOutcome::OutcomeUnknown;
-        } else {
-            result.deliveryOutcome = ProviderDeliveryOutcome::DefiniteFailure;
-        }
-    } else if (result.statusCode >= 300) {
-        result.deliveryOutcome = ProviderDeliveryOutcome::DefiniteFailure;
-    } else {
-        result.deliveryOutcome = ProviderDeliveryOutcome::Succeeded;
     }
+    result.deliveryOutcome = classifyDelivery(result, method == "POST");
     reply->deleteLater();
     return result;
 }
@@ -104,7 +147,9 @@ NetworkResult performMultipartRequest(QNetworkAccessManager &manager,
                                       const QNetworkRequest &request,
                                       QHttpMultiPart *multipart)
 {
-    QNetworkReply *reply = manager.post(request, multipart);
+    QNetworkRequest safeRequest(request);
+    safeRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+    QNetworkReply *reply = manager.post(safeRequest, multipart);
     multipart->setParent(reply);
 
     QEventLoop loop;
@@ -117,6 +162,7 @@ NetworkResult performMultipartRequest(QNetworkAccessManager &manager,
     });
     NetworkResult result;
     captureSslErrors(reply, &result);
+    QObject::connect(reply, &QNetworkReply::requestSent, reply, [&result]() { result.requestSent = true; });
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     timeoutTimer.start(90000);
     loop.exec();
@@ -138,7 +184,9 @@ NetworkResult performDeviceRequest(QNetworkAccessManager &manager,
                                    const QNetworkRequest &request,
                                    QIODevice *body)
 {
-    QNetworkReply *reply = manager.post(request, body);
+    QNetworkRequest safeRequest(request);
+    safeRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+    QNetworkReply *reply = manager.post(safeRequest, body);
 
     QEventLoop loop;
     QTimer timeoutTimer;
@@ -150,6 +198,7 @@ NetworkResult performDeviceRequest(QNetworkAccessManager &manager,
     });
     NetworkResult result;
     captureSslErrors(reply, &result);
+    QObject::connect(reply, &QNetworkReply::requestSent, reply, [&result]() { result.requestSent = true; });
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     timeoutTimer.start(90000);
     loop.exec();
@@ -184,23 +233,11 @@ QString providerRequestFailure(const ProviderRequest &request,
                                const QString &stage = "failed after sending",
                                const QStringList &extraDetails = {})
 {
-    QStringList details;
-    details << QString("%1 %2").arg(providerName, endpointType);
-    details << QString("model=%1").arg(request.model.trimmed().isEmpty() ? "<empty>" : request.model);
-    details << QString("keyPresent=%1").arg(request.apiKey.trimmed().isEmpty() ? "no" : "yes");
-    details << QString("stage=%1").arg(stage);
-    details << extraDetails;
-    if (result.statusCode > 0) {
-        details << QString("http=%1").arg(result.statusCode);
-    }
-    if (!result.error.isEmpty()) {
-        details << QString("network=%1").arg(result.error)
-                << QString("networkCode=%1").arg(result.networkErrorCode);
-    }
-    if (result.sslErrorCount > 0) {
-        details << QString("sslErrorCount=%1").arg(result.sslErrorCount);
-    }
-    return details.join(" | ");
+    Q_UNUSED(request);
+    Q_UNUSED(stage);
+    Q_UNUSED(extraDetails);
+    return QString("%1 attachment preparation failed (%2): %3. No generation request was sent; an upload may have been created.")
+        .arg(providerName, endpointType, safeFailureDetail(result));
 }
 
 QString joinedText(const QStringList &blocks)
@@ -630,11 +667,11 @@ ProviderResponse makeGenerationFailureResponse(const ProviderRequest &request,
             : QString{};
         response = makeErrorResponse(
             request,
-            QString("%1 rejected the request%2.")
-                .arg(providerKindToString(request.provider), status),
+            QString("%1%2: %3. No generation result was produced.")
+                .arg(providerKindToString(request.provider), status, safeFailureDetail(result)),
             ProviderDeliveryOutcome::DefiniteFailure);
     } else {
-        response = makeErrorResponse(request, outcomeUnknownMessage(),
+        response = makeErrorResponse(request, QString("%1: %2. %3").arg(providerKindToString(request.provider), safeFailureDetail(result), outcomeUnknownMessage()),
                                      ProviderDeliveryOutcome::OutcomeUnknown);
     }
     if (response.deliveryOutcome == ProviderDeliveryOutcome::DefiniteFailure) {
@@ -819,9 +856,7 @@ ProviderResponse callGemini(QNetworkAccessManager &manager,
         const QString resolvedMime = uploadJson.value("mimeType").toString(mimeType);
         const QString stateName = uploadJson.value("state").toObject().value("name").toString();
         if (fileUri.isEmpty() || (!stateName.isEmpty() && stateName != "ACTIVE")) {
-            response.errorMessage = QString("Gemini file upload did not return an active file (state=%1, uri=%2).")
-                .arg(stateName.isEmpty() ? "unknown" : stateName,
-                     fileUri.isEmpty() ? "<empty>" : fileUri);
+            response.errorMessage = QString("Gemini attachment preparation did not return an active file. No generation request was sent.");
             return {};
         }
 
@@ -1066,17 +1101,8 @@ ProviderResponse callAnthropic(QNetworkAccessManager &manager,
 
 bool shouldAutomaticallyRetry(const ProviderResponse &response)
 {
-    if (response.success
-        || response.deliveryOutcome != ProviderDeliveryOutcome::DefiniteFailure) {
-        return false;
-    }
-    return response.errorMessage.contains("429")
-        || response.errorMessage.contains("408")
-        || response.errorMessage.contains("500")
-        || response.errorMessage.contains("502")
-        || response.errorMessage.contains("503")
-        || response.errorMessage.contains("network=timeout", Qt::CaseInsensitive)
-        || response.errorMessage.contains("networkCode=5", Qt::CaseInsensitive);
+    Q_UNUSED(response);
+    return false; // Generation retries require explicit user authorization.
 }
 
 ProviderResponse processProviderRequest(QNetworkAccessManager &manager,
@@ -1084,7 +1110,7 @@ ProviderResponse processProviderRequest(QNetworkAccessManager &manager,
                                         const JsonRequestHandler &jsonHandler = {})
 {
     ProviderResponse response;
-    for (int attempt = 0; attempt < 2; ++attempt) {
+    {
         switch (request.provider) {
         case ProviderKind::OpenAI:
             response = callOpenAi(manager, request, jsonHandler);
@@ -1096,10 +1122,6 @@ ProviderResponse processProviderRequest(QNetworkAccessManager &manager,
             response = callAnthropic(manager, request, jsonHandler);
             break;
         }
-        if (response.success || attempt >= 1 || !shouldAutomaticallyRetry(response)) {
-            break;
-        }
-        QThread::msleep(3000);
     }
 
     if (response.success) {
@@ -1190,22 +1212,28 @@ ProviderResponse ProviderGateway::processForTesting(const ProviderRequest &reque
         result.networkErrorCode = testResult.networkErrorCode;
         result.sslErrorCount = testResult.sslErrorCount;
         result.headers = testResult.headers;
+        result.requestSent = testResult.requestSent;
+        result.tlsCategory = tlsFailureCategory(testResult.tlsErrors);
         if (testResult.cancelled) {
-            result.deliveryOutcome = ProviderDeliveryOutcome::Cancelled;
-        } else if (!result.error.isEmpty()) {
-            result.deliveryOutcome = method == "POST"
-                ? ProviderDeliveryOutcome::OutcomeUnknown
-                : ProviderDeliveryOutcome::DefiniteFailure;
-        } else if (result.statusCode >= 300) {
-            result.deliveryOutcome = ProviderDeliveryOutcome::DefiniteFailure;
-        } else {
-            result.deliveryOutcome = ProviderDeliveryOutcome::Succeeded;
+            result.networkErrorCode = QNetworkReply::OperationCanceledError;
+            result.error = "cancelled";
         }
+        result.deliveryOutcome = classifyDelivery(result, method == "POST");
         return result;
     };
 
     QNetworkAccessManager manager;
     return processProviderRequest(manager, request, handler);
+}
+
+ProviderResponse ProviderGateway::localRequestForTesting(const QUrl &url)
+{
+    ProviderRequest request;
+    if (url.scheme() != "http" || url.host() != "127.0.0.1")
+        return makeErrorResponse(request, "Only loopback fixture URLs are permitted.");
+    QNetworkAccessManager manager;
+    const auto result = performJsonRequest(manager, QNetworkRequest(url), "{}");
+    return makeGenerationFailureResponse(request, result);
 }
 
 bool ProviderGateway::shouldRetryForTesting(const ProviderResponse &response)

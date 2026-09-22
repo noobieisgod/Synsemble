@@ -9,6 +9,7 @@
 #include <QList>
 #include <QPair>
 #include <QUrl>
+#include <QSslError>
 #endif
 
 #include "domain/models.h"
@@ -74,6 +75,8 @@ struct ProviderTestNetworkResult {
     int networkErrorCode = 0;
     int sslErrorCount = 0;
     bool cancelled = false;
+    bool requestSent = true;
+    QList<QSslError> tlsErrors;
     QList<QPair<QByteArray, QByteArray>> headers;
 };
 
@@ -94,6 +97,7 @@ public:
 #ifdef AMT_TESTING
     static ProviderResponse processForTesting(const ProviderRequest &request,
                                                const ProviderTestTransport &transport);
+    static ProviderResponse localRequestForTesting(const QUrl &url);
     static bool shouldRetryForTesting(const ProviderResponse &response);
 #endif
 

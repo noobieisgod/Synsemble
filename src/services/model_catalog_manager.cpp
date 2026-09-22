@@ -8,6 +8,8 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QTimer>
+#include <QSslError>
+#include "providers/network_diagnostics.h"
 #include <QUrl>
 #include <QUrlQuery>
 #include <QVariantMap>
@@ -53,18 +55,31 @@ void appendDeduplicated(QVector<ModelCatalogEntry> &target,
 }
 
 QString replyFailureSummary(QNetworkReply *reply) {
-  QStringList parts;
-  const int statusCode =
-      reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-  if (statusCode > 0) {
-    parts << QString("HTTP %1").arg(statusCode);
+  const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+  if (status == 401) return "authentication rejected (HTTP 401); check the saved API key";
+  if (status == 403) return "access denied (HTTP 403); check provider permissions";
+  if (status == 429) return "rate limit or quota reached (HTTP 429); retry later";
+  if (reply->property("amtTimedOut").toBool() || reply->error() == QNetworkReply::TimeoutError)
+    return "connection timeout; retry when the network is available";
+  if (reply->error() == QNetworkReply::SslHandshakeFailedError) {
+    const QString category = reply->property("amtTlsCategory").toString();
+    return "secure connection failed (TLS" + (category.isEmpty() ? QString{} : ": " + category)
+        + "); check device date/time, network or VPN; the saved key was not validated";
   }
-  if (reply->property("amtTimedOut").toBool()) {
-    parts << "timeout";
-  } else if (reply->error() != QNetworkReply::NoError) {
-    parts << QString("network code %1").arg(static_cast<int>(reply->error()));
-  }
-  return parts.isEmpty() ? "unknown transport error" : parts.join(", ");
+  if (reply->error() == QNetworkReply::HostNotFoundError) return "server address could not be resolved; check DNS/network";
+  if (reply->error() == QNetworkReply::ConnectionRefusedError
+      || reply->error() == QNetworkReply::RemoteHostClosedError
+      || reply->error() == QNetworkReply::TemporaryNetworkFailureError)
+    return "network connection failed; check connectivity and retry";
+  return status > 0 ? QString("provider request failed (HTTP %1)").arg(status)
+                    : "network request failed; retry when connected";
+}
+
+// Only fixed categories reach presentation, never certificate data or transport strings.
+void observeTlsErrors(QNetworkReply *reply) {
+  QObject::connect(reply, &QNetworkReply::sslErrors, reply, [reply](const QList<QSslError> &errors) {
+    reply->setProperty("amtTlsCategory", amt::tlsFailureCategory(errors));
+  });
 }
 
 bool supportsGeminiGenerateContent(const QJsonObject &model) {
@@ -109,54 +124,37 @@ ModelCatalogManager::ModelCatalogManager(CredentialLoader credentialLoader,
 }
 
 void ModelCatalogManager::fetchModelsAsync() {
-  const quint64 generation = ++m_generation;
+  m_generations.clear();
+  m_refreshing.clear();
   cancelActiveReplies();
-  m_statusMessages.clear();
-  m_statusSuccess.clear();
-  m_statusFallback.clear();
-  m_pendingRequests = 0;
+  for (auto provider : {ProviderKind::OpenAI, ProviderKind::Gemini, ProviderKind::Anthropic})
+    beginRefresh(provider);
+  emit statusesChanged();
+  if (m_refreshing.isEmpty()) QTimer::singleShot(0, this, &ModelCatalogManager::fetchCompleted);
+}
 
-  const QString openAiKey =
-      m_credentialLoader ? m_credentialLoader(ProviderKind::OpenAI) : QString{};
-  const QString geminiKey =
-      m_credentialLoader ? m_credentialLoader(ProviderKind::Gemini) : QString{};
-  const QString anthropicKey = m_credentialLoader
-                                   ? m_credentialLoader(ProviderKind::Anthropic)
-                                   : QString{};
+void ModelCatalogManager::fetchModelsAsync(ProviderKind provider) {
+  if (m_refreshing.contains(provider)) return;
+  beginRefresh(provider);
+  emit statusesChanged();
+  if (m_refreshing.isEmpty()) QTimer::singleShot(0, this, &ModelCatalogManager::fetchCompleted);
+}
 
-  if (!openAiKey.isEmpty()) {
-    setStatus(ProviderKind::OpenAI, "OpenAI is refreshing...", false);
-    ++m_pendingRequests;
-    fetchOpenAI(openAiKey, generation);
-  } else {
-    setStatus(ProviderKind::OpenAI, "OpenAI skipped: no API key configured.",
-              false);
+void ModelCatalogManager::beginRefresh(ProviderKind provider) {
+  const quint64 generation = ++m_generation;
+  m_generations[provider] = generation;
+  const QString key = m_credentialLoader ? m_credentialLoader(provider) : QString{};
+  const QString name = providerKindToString(provider);
+  if (key.isEmpty()) {
+    setStatus(provider, name + " skipped: no API key configured.", false);
+    return;
   }
-
-  if (!geminiKey.isEmpty()) {
-    setStatus(ProviderKind::Gemini, "Google is refreshing...", false);
-    ++m_pendingRequests;
-    fetchGemini(geminiKey, generation);
-  } else {
-    setStatus(ProviderKind::Gemini, "Google skipped: no API key configured.",
-              false);
-  }
-
-  if (!anthropicKey.isEmpty()) {
-    setStatus(ProviderKind::Anthropic, "Anthropic is refreshing...", false);
-    ++m_pendingRequests;
-    fetchAnthropic(anthropicKey, generation);
-  } else {
-    setStatus(ProviderKind::Anthropic,
-              "Anthropic skipped: no API key configured.", false);
-  }
-
-  if (m_pendingRequests == 0) {
-    QTimer::singleShot(0, this, [this, generation]() {
-      if (generation == m_generation) {
-        emit fetchCompleted();
-      }
-    });
+  m_refreshing.insert(provider);
+  setStatus(provider, name + " is refreshing...", false);
+  switch (provider) {
+  case ProviderKind::OpenAI: fetchOpenAI(key, generation); break;
+  case ProviderKind::Gemini: fetchGemini(key, generation); break;
+  case ProviderKind::Anthropic: fetchAnthropic(key, generation); break;
   }
 }
 
@@ -176,6 +174,7 @@ QVariantList ModelCatalogManager::fetchStatuses() const {
   for (ProviderKind provider : providers) {
     QVariantMap row;
     row.insert("provider", providerKindToString(provider));
+    row.insert("refreshing", m_refreshing.contains(provider));
     row.insert("message",
                m_statusMessages.value(
                    provider, QString("%1 has not refreshed yet.")
@@ -207,15 +206,11 @@ void ModelCatalogManager::setFailureStatus(ProviderKind provider,
             false, true);
 }
 
-void ModelCatalogManager::checkCompletion(quint64 generation) {
-  if (generation != m_generation) {
-    return;
-  }
-  --m_pendingRequests;
-  if (m_pendingRequests <= 0) {
-    m_pendingRequests = 0;
-    emit fetchCompleted();
-  }
+void ModelCatalogManager::checkCompletion(ProviderKind provider, quint64 generation) {
+  if (generation != m_generations.value(provider)) return;
+  m_refreshing.remove(provider);
+  emit statusesChanged();
+  if (m_refreshing.isEmpty()) emit fetchCompleted();
 }
 
 void ModelCatalogManager::cancelActiveReplies() {
@@ -234,6 +229,7 @@ void ModelCatalogManager::fetchOpenAI(const QString &apiKey,
                        QByteArray("Bearer ") + apiKey.toUtf8());
   QNetworkReply *reply = m_networkManager->get(request);
   m_activeReplies.insert(reply);
+  observeTlsErrors(reply);
 
   auto *timeout = new QTimer(reply);
   timeout->setSingleShot(true);
@@ -246,7 +242,7 @@ void ModelCatalogManager::fetchOpenAI(const QString &apiKey,
   connect(reply, &QNetworkReply::finished, this, [this, reply, generation]() {
     m_activeReplies.remove(reply);
     reply->deleteLater();
-    if (generation != m_generation) {
+    if (generation != m_generations.value(ProviderKind::OpenAI)) {
       return;
     }
 
@@ -287,7 +283,7 @@ void ModelCatalogManager::fetchOpenAI(const QString &apiKey,
         }
       }
     }
-    checkCompletion(generation);
+    checkCompletion(ProviderKind::OpenAI, generation);
   });
 }
 
@@ -299,6 +295,7 @@ void ModelCatalogManager::fetchGemini(const QString &apiKey,
   url.setQuery(query);
   QNetworkReply *reply = m_networkManager->get(QNetworkRequest(url));
   m_activeReplies.insert(reply);
+  observeTlsErrors(reply);
 
   auto *timeout = new QTimer(reply);
   timeout->setSingleShot(true);
@@ -311,7 +308,7 @@ void ModelCatalogManager::fetchGemini(const QString &apiKey,
   connect(reply, &QNetworkReply::finished, this, [this, reply, generation]() {
     m_activeReplies.remove(reply);
     reply->deleteLater();
-    if (generation != m_generation) {
+    if (generation != m_generations.value(ProviderKind::Gemini)) {
       return;
     }
 
@@ -357,7 +354,7 @@ void ModelCatalogManager::fetchGemini(const QString &apiKey,
         }
       }
     }
-    checkCompletion(generation);
+    checkCompletion(ProviderKind::Gemini, generation);
   });
 }
 
@@ -368,6 +365,7 @@ void ModelCatalogManager::fetchAnthropic(const QString &apiKey,
   request.setRawHeader("anthropic-version", "2023-06-01");
   QNetworkReply *reply = m_networkManager->get(request);
   m_activeReplies.insert(reply);
+  observeTlsErrors(reply);
 
   auto *timeout = new QTimer(reply);
   timeout->setSingleShot(true);
@@ -380,7 +378,7 @@ void ModelCatalogManager::fetchAnthropic(const QString &apiKey,
   connect(reply, &QNetworkReply::finished, this, [this, reply, generation]() {
     m_activeReplies.remove(reply);
     reply->deleteLater();
-    if (generation != m_generation) {
+    if (generation != m_generations.value(ProviderKind::Anthropic)) {
       return;
     }
 
@@ -423,7 +421,7 @@ void ModelCatalogManager::fetchAnthropic(const QString &apiKey,
         }
       }
     }
-    checkCompletion(generation);
+    checkCompletion(ProviderKind::Anthropic, generation);
   });
 }
 

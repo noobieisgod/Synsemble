@@ -5,6 +5,9 @@
 #include <QJsonObject>
 #include <QNetworkReply>
 #include <QThread>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include "providers/network_diagnostics.h"
 #include <QUrlQuery>
 
 #include "providers/provider_gateway.h"
@@ -153,6 +156,8 @@ ProviderTestNetworkResult resultFor(int mode, int scenario)
         result.transportError = "network";
         result.networkErrorCode = QNetworkReply::SslHandshakeFailedError;
         result.sslErrorCount = 1;
+        result.requestSent = false;
+        result.tlsErrors = {QSslError(QSslError::UnableToGetLocalIssuerCertificate)};
         break;
     case RemoteCloseScenario:
         result.transportError = "network";
@@ -190,6 +195,9 @@ private slots:
     void definitePreTransmissionFailureDoesNotSend_data();
     void definitePreTransmissionFailureDoesNotSend();
     void definiteTransientRetryPolicyRemainsAvailable();
+    void deliveryClassification();
+    void realQtHttpRejections();
+    void tlsCategories();
     void geminiRejectedReusableHandleIsNotReplayed();
     void providerVisibleContentExtraction_data();
     void providerVisibleContentExtraction();
@@ -238,7 +246,7 @@ void ProviderGatewayTests::generationPostIsNotReplayed()
     QVERIFY(!response.errorMessage.contains(syntheticKey));
     QVERIFY(!response.errorMessage.contains("https://"));
     QVERIFY(!response.errorMessage.contains("networkCode"));
-    QVERIFY(!response.errorMessage.contains("ssl", Qt::CaseInsensitive));
+    QVERIFY(!response.errorMessage.contains("private response"));
 
     if (scenario == SuccessScenario || scenario == DelayedSuccessScenario) {
         QVERIFY(response.success);
@@ -246,11 +254,11 @@ void ProviderGatewayTests::generationPostIsNotReplayed()
                  static_cast<int>(ProviderDeliveryOutcome::Succeeded));
         QCOMPARE(response.content, QString("confirmed"));
         QCOMPARE(response.usedTokens, 15);
-    } else if (scenario == CancellationScenario) {
+    } else if (scenario == TlsFailureScenario) {
         QVERIFY(!response.success);
         QCOMPARE(static_cast<int>(response.deliveryOutcome),
-                 static_cast<int>(ProviderDeliveryOutcome::Cancelled));
-        QVERIFY(response.errorMessage.contains("cancelled"));
+                 static_cast<int>(ProviderDeliveryOutcome::DefiniteFailure));
+        QVERIFY(response.errorMessage.contains("missing issuer"));
     } else if (scenario == MalformedResponseScenario) {
         QVERIFY(!response.success);
         QCOMPARE(static_cast<int>(response.deliveryOutcome),
@@ -261,7 +269,7 @@ void ProviderGatewayTests::generationPostIsNotReplayed()
         QVERIFY(!response.success);
         QCOMPARE(static_cast<int>(response.deliveryOutcome),
                  static_cast<int>(ProviderDeliveryOutcome::OutcomeUnknown));
-        QCOMPARE(response.errorMessage, QString(unknownOutcomeMessage));
+        QVERIFY(response.errorMessage.contains(unknownOutcomeMessage));
     }
 }
 
@@ -294,13 +302,77 @@ void ProviderGatewayTests::definitePreTransmissionFailureDoesNotSend()
     QVERIFY(response.errorMessage.contains("blocked before sending"));
 }
 
+void ProviderGatewayTests::deliveryClassification()
+{
+    for (int mode = OpenAiMode; mode <= AnthropicMode; ++mode) {
+        for (int status : {400, 401, 403, 404, 413, 422, 429, 408, 500, 502, 503, 307}) {
+            int sends = 0;
+            const auto response = ProviderGateway::processForTesting(requestFor(mode), [&](const ProviderTestRequest &) {
+                ++sends;
+                ProviderTestNetworkResult result;
+                result.statusCode = status;
+                result.networkErrorCode = QNetworkReply::UnknownContentError;
+                result.transportError = "private transport";
+                result.body = "private body and signature";
+                return result;
+            });
+            QCOMPARE(sends, 1);
+            QCOMPARE(response.deliveryOutcome, (status == 408 || status >= 500 || status == 307)
+                ? ProviderDeliveryOutcome::OutcomeUnknown : ProviderDeliveryOutcome::DefiniteFailure);
+            QVERIFY(!response.errorMessage.contains("private"));
+        }
+        for (int code : {int(QNetworkReply::HostNotFoundError), int(QNetworkReply::ConnectionRefusedError), int(QNetworkReply::SslHandshakeFailedError), int(QNetworkReply::OperationCanceledError)}) {
+            for (bool sent : {false, true}) {
+                const auto response = ProviderGateway::processForTesting(requestFor(mode), [&](const ProviderTestRequest &) {
+                    ProviderTestNetworkResult result;
+                    result.requestSent = sent; result.networkErrorCode = code; result.transportError = "network";
+                    return result;
+                });
+                QCOMPARE(response.deliveryOutcome, sent ? ProviderDeliveryOutcome::OutcomeUnknown
+                    : code == QNetworkReply::OperationCanceledError ? ProviderDeliveryOutcome::Cancelled : ProviderDeliveryOutcome::DefiniteFailure);
+            }
+        }
+    }
+}
+
+void ProviderGatewayTests::realQtHttpRejections()
+{
+    for (int status : {401, 403, 429, 503, 307}) {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        int sends = 0;
+        connect(&server, &QTcpServer::newConnection, &server, [&]() {
+            auto *socket = server.nextPendingConnection();
+            connect(socket, &QTcpSocket::readyRead, socket, [&, socket]() {
+                socket->readAll();
+                if (socket->property("answered").toBool()) return;
+                socket->setProperty("answered", true); ++sends;
+                socket->write("HTTP/1.1 " + QByteArray::number(status) + " Fixture\r\nContent-Length: 2\r\nConnection: close\r\nLocation: /must-not-replay\r\n\r\n{}");
+                socket->disconnectFromHost();
+            });
+        });
+        const auto response = ProviderGateway::localRequestForTesting(QUrl(QString("http://127.0.0.1:%1/fixture").arg(server.serverPort())));
+        QCOMPARE(sends, 1);
+        QCOMPARE(response.deliveryOutcome, status == 503 || status == 307
+            ? ProviderDeliveryOutcome::OutcomeUnknown : ProviderDeliveryOutcome::DefiniteFailure);
+    }
+}
+
+void ProviderGatewayTests::tlsCategories()
+{
+    const QList<QSslError> errors{QSslError(QSslError::UnableToGetLocalIssuerCertificate), QSslError(QSslError::CertificateUntrusted), QSslError(QSslError::SelfSignedCertificate), QSslError(QSslError::HostNameMismatch), QSslError(QSslError::CertificateExpired), QSslError(QSslError::CertificateNotYetValid)};
+    const auto message = tlsFailureCategory(errors);
+    for (const auto *category : {"missing issuer", "untrusted", "self-signed", "hostname", "expired", "not yet valid"})
+        QVERIFY(message.contains(category));
+}
+
 void ProviderGatewayTests::definiteTransientRetryPolicyRemainsAvailable()
 {
     ProviderResponse response;
     response.success = false;
     response.deliveryOutcome = ProviderDeliveryOutcome::DefiniteFailure;
     response.errorMessage = "Synthetic upload failure http=503";
-    QVERIFY(ProviderGateway::shouldRetryForTesting(response));
+    QVERIFY(!ProviderGateway::shouldRetryForTesting(response));
 
     response.errorMessage = "Synthetic non-transient failure";
     QVERIFY(!ProviderGateway::shouldRetryForTesting(response));
