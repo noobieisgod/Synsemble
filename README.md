@@ -1,5 +1,7 @@
 # Synsemble
 
+<img src="branding/synsemble.png" alt="Synsemble symbol" width="80">
+
 Synsemble is a multi-agent AI collaboration app that brings multiple AI roles together to plan, analyze, execute, review, revise, and produce a final result.
 
 Synsemble is not primarily an AI meeting recorder, transcription app, or AI meeting notetaker. Its table and seat metaphor represents multiple AI agents collaborating on a task with assigned providers, models, and roles.
@@ -26,7 +28,8 @@ Synsemble coordinates agents through planning, research where appropriate, execu
 - Secure Android API-key storage with saved-state-only credential status
 - Structured multi-agent planning, execution, review, and decision workflows
 - Transcript, session history, and event log
-- Artifact generation and management inside Session
+- Conversation-first workspace with Team, Artifacts, and Activity details
+- Final-result guidance: tap Team, then choose Artifacts
 - File attachments with protected app-private storage
 - Input, output, and total token telemetry
 - User-configurable token, round, loop, phase-time, and session-time limits
@@ -44,7 +47,9 @@ Users can configure token, round, loop, phase-time, and session-time limits. Rea
 
 Users provide their own API keys for supported providers. Android credentials are stored through an Android Keystore-backed bridge. Persisted credentials are never returned to QML or displayed back to the user; the interface shows only whether a credential is Saved.
 
-Prompts, selected conversation context, generated content, and user-selected attachments may be sent directly to the configured provider over HTTPS. Review the [privacy policy](docs/index.html) before using sensitive material.
+Prompts, selected conversation context, generated content, and user-selected attachments may be sent directly to the configured provider over HTTPS. Review the [privacy policy](https://noobieisgod.github.io/Synsemble/) before using sensitive material.
+
+See the [mobile interface guide](docs/MOBILE_UI.md) for navigation and the [review report](docs/MOBILE_REVIEW.md) for validation evidence and remaining limitations. [Host screenshots](docs/screenshots/README.md) use synthetic fixtures, not real provider conversations.
 
 ## Platform
 
@@ -58,7 +63,7 @@ Requirements:
 
 - CMake 3.21 or newer
 - A C++20 compiler
-- Qt 6.8 or newer
+- Qt 6.9 or newer (validated with Qt 6.11.1)
 - Ninja or another CMake-supported build tool
 - Android SDK with API 36 for Android builds
 - An Android NDK compatible with the installed Qt Android kit

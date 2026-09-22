@@ -1,0 +1,168 @@
+Synsemble mobile review coverage inventory
+Baseline: a948ca31170668d3d09075708e0401f8a7234907
+Closeout: 2026-09-21
+Generated builds and the separate Windows repository are excluded.
+Area-level coverage is recorded below; this is not an assertion of exhaustive line-by-line review.
+Findings, executed tests and acceptance gaps: MOBILE_REVIEW.md
+
+Build/resource configuration: static review and host/Android build checks | .gitattributes
+Build/resource configuration: static review and host/Android build checks | .gitignore
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/AndroidManifest.xml
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/mipmap-anydpi-v26/ic_launcher_round.xml
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/mipmap-anydpi-v26/ic_launcher.xml
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/mipmap-hdpi/ic_launcher_foreground.png
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/mipmap-hdpi/ic_launcher_round.png
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/mipmap-hdpi/ic_launcher.png
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/mipmap-mdpi/ic_launcher_foreground.png
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/mipmap-mdpi/ic_launcher_round.png
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/mipmap-mdpi/ic_launcher.png
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/mipmap-xhdpi/ic_launcher_foreground.png
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/mipmap-xhdpi/ic_launcher_round.png
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/mipmap-xhdpi/ic_launcher.png
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/mipmap-xxhdpi/ic_launcher_foreground.png
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/mipmap-xxhdpi/ic_launcher_round.png
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/mipmap-xxhdpi/ic_launcher.png
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/mipmap-xxxhdpi/ic_launcher_foreground.png
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/mipmap-xxxhdpi/ic_launcher_round.png
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/mipmap-xxxhdpi/ic_launcher.png
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/values/colors.xml
+Android metadata/resource: identity/build review; launcher assets regenerated; device checks pending | android/res/values/styles.xml
+Android bridge: static review, Release compile; bounded copier host test; device checks pending | android/src/com/aimeetingtable/mobile/AttachmentContentProvider.java
+Android bridge: static review, Release compile; bounded copier host test; device checks pending | android/src/com/aimeetingtable/mobile/BoundedStreamCopier.java
+Android bridge: static review, Release compile; bounded copier host test; device checks pending | android/src/com/aimeetingtable/mobile/FileBridge.java
+Android bridge: static review, Release compile; bounded copier host test; device checks pending | android/src/com/aimeetingtable/mobile/SecureCredentialStore.java
+Documentation/license: inventoried; relevant UI/build guidance reviewed, historical notes retained | App Vision.txt
+Branding asset/generator: geometry and host visual review | branding/export-icons.ps1
+Bundled font/license: upstream provenance and Qt family loading verified | branding/fonts/Inter-OFL.txt
+Bundled font/license: upstream provenance and Qt family loading verified | branding/fonts/Inter.ttf
+Bundled font/license: upstream provenance and Qt family loading verified | branding/fonts/JetBrainsMono-Bold.ttf
+Bundled font/license: upstream provenance and Qt family loading verified | branding/fonts/JetBrainsMono-OFL.txt
+Bundled font/license: upstream provenance and Qt family loading verified | branding/fonts/JetBrainsMono-Regular.ttf
+Bundled font/license: upstream provenance and Qt family loading verified | branding/fonts/README.md
+Branding asset/generator: geometry and host visual review | branding/synsemble-light.png
+Branding asset/generator: geometry and host visual review | branding/synsemble-light.svg
+Branding asset/generator: geometry and host visual review | branding/synsemble.png
+Branding asset/generator: geometry and host visual review | branding/synsemble.svg
+Documentation/license: inventoried; relevant UI/build guidance reviewed, historical notes retained | CMakeLists.txt
+Documentation/license: inventoried; relevant UI/build guidance reviewed, historical notes retained | docs/ANDROID_DEPLOYMENT.md
+Documentation/license: inventoried; relevant UI/build guidance reviewed, historical notes retained | docs/ARCHITECTURE_REPORT.md
+Documentation/license: inventoried; relevant UI/build guidance reviewed, historical notes retained | docs/google-play-checklist.md
+Build/resource configuration: static review and host/Android build checks | docs/index.html
+Documentation/license: inventoried; relevant UI/build guidance reviewed, historical notes retained | docs/MOBILE_REVIEW_INVENTORY.txt
+Documentation/license: inventoried; relevant UI/build guidance reviewed, historical notes retained | docs/MOBILE_REVIEW.md
+Documentation/license: inventoried; relevant UI/build guidance reviewed, historical notes retained | docs/MOBILE_UI.md
+Documentation/license: inventoried; relevant UI/build guidance reviewed, historical notes retained | docs/README.md
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/activity.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/agent-editor.png
+UI fixture capture/documentation: usability regression run; device limitations in report | docs/screenshots/appearance.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/artifacts.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/baseline-activity.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/baseline-transcript.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/completed.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/conversation.png
+UI fixture capture/documentation: usability regression run; device limitations in report | docs/screenshots/drawer.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/failed.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/hard-stop.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/landscape.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/manual-pause.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/phone-dark.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/phone-light.png
+UI fixture capture/documentation: usability regression run; device limitations in report | docs/screenshots/quick-guide.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/README.md
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/running.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/settings.png
+UI fixture capture/documentation: usability regression run; device limitations in report | docs/screenshots/table-actions.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/tablet.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/team.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/unknown-outcome.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/usage.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/welcome.png
+Host fixture capture/documentation: visual evidence, not physical Android acceptance | docs/screenshots/wide.png
+Historical image: inventoried, unused by new production branding; retained | docs/store-assets/ai-meeting-table-feature-graphic-1024x500.png
+Historical image: inventoried, unused by new production branding; retained | docs/store-assets/ai-meeting-table-feature-graphic-google-play-1024x500.png
+Historical image: inventoried, unused by new production branding; retained | docs/store-assets/ai-meeting-table-icon-512x512.png
+Historical image: inventoried, unused by new production branding; retained | docs/store-assets/tablet-01-table-2560x1440.png
+Historical image: inventoried, unused by new production branding; retained | docs/store-assets/tablet-02-drawer-2560x1440.png
+Historical image: inventoried, unused by new production branding; retained | docs/store-assets/tablet-03-transcript-2560x1440.png
+Documentation/license: inventoried; relevant UI/build guidance reviewed, historical notes retained | docs/TEST_PLAN.md
+Historical image: inventoried, unused by new production branding; retained | Full Logo.png
+Historical image: inventoried, unused by new production branding; retained | Icon Logo.png
+Documentation/license: inventoried; relevant UI/build guidance reviewed, historical notes retained | LICENSE.txt
+Historical prototype: inventoried, not compiled into mobile app; no redesign changes | prototypes/phase3-gui/concept-a/app.js
+Historical prototype: inventoried, not compiled into mobile app; no redesign changes | prototypes/phase3-gui/concept-a/index.html
+Historical prototype: inventoried, not compiled into mobile app; no redesign changes | prototypes/phase3-gui/concept-a/styles.css
+Historical prototype: inventoried, not compiled into mobile app; no redesign changes | prototypes/phase3-gui/concept-b/app.js
+Historical prototype: inventoried, not compiled into mobile app; no redesign changes | prototypes/phase3-gui/concept-b/index.html
+Historical prototype: inventoried, not compiled into mobile app; no redesign changes | prototypes/phase3-gui/concept-b/styles.css
+Historical prototype: inventoried, not compiled into mobile app; no redesign changes | prototypes/phase3-gui/concept-c/app.js
+Historical prototype: inventoried, not compiled into mobile app; no redesign changes | prototypes/phase3-gui/concept-c/index.html
+Historical prototype: inventoried, not compiled into mobile app; no redesign changes | prototypes/phase3-gui/concept-c/styles.css
+Historical prototype: inventoried, not compiled into mobile app; no redesign changes | prototypes/phase3-gui/index.html
+Historical prototype: inventoried, not compiled into mobile app; no redesign changes | prototypes/phase3-gui/launcher.css
+Historical prototype: inventoried, not compiled into mobile app; no redesign changes | prototypes/phase3-gui/launcher.js
+Historical prototype: inventoried, not compiled into mobile app; no redesign changes | prototypes/phase3-gui/README.md
+Production UI: static review, lint, host fixtures; bounded emulator checks; physical-device gaps in report | qml/ConversationPage.qml
+Production UI: static review, lint, host fixtures; bounded emulator checks; physical-device gaps in report | qml/Main.qml
+Production UI: static review, lint, host fixtures; bounded emulator checks; physical-device gaps in report | qml/SessionDetails.qml
+Production UI: static review, lint, host fixtures; bounded emulator checks; physical-device gaps in report | qml/SettingsPage.qml
+Production UI: static review, lint, host fixtures; bounded emulator checks; physical-device gaps in report | qml/TranscriptScroll.js
+Documentation/license: inventoried; relevant UI/build guidance reviewed, historical notes retained | README.md
+Build/resource configuration: static review and host/Android build checks | resources.qrc
+Production native: flow/static review; native fixtures | src/app/application_context.cpp
+Production native: flow/static review; native fixtures | src/app/application_context.h
+Production native: flow/static review; native fixtures | src/app/mobile_app_controller.cpp
+Production native: flow/static review; native fixtures | src/app/mobile_app_controller.h
+Production native: flow/static review; native fixtures | src/core/event_bus.cpp
+Production native: flow/static review; native fixtures | src/core/event_bus.h
+Production native: flow/static review; native fixtures | src/core/logging.cpp
+Production native: flow/static review; native fixtures | src/core/logging.h
+Production native: flow/static review; native fixtures | src/core/response_parser.cpp
+Production native: flow/static review; native fixtures | src/core/response_parser.h
+Production native: flow/static review; native fixtures | src/core/session_runner.cpp
+Production native: flow/static review; native fixtures | src/core/session_runner.h
+Production native: flow/static review; native fixtures | src/core/startup_timeline.cpp
+Production native: flow/static review; native fixtures | src/core/startup_timeline.h
+Production native: flow/static review; native fixtures | src/core/visible_text.h
+Production native: flow/static review; native fixtures | src/core/workflow_engine.cpp
+Production native: flow/static review; native fixtures | src/core/workflow_engine.h
+Production native: flow/static review; native fixtures | src/domain/models.h
+Production native: flow/static review; native fixtures | src/main.cpp
+Production native: flow/static review; native fixtures | src/persistence/database_manager.cpp
+Production native: flow/static review; native fixtures | src/persistence/database_manager.h
+Provider recovery correction: shared safe TLS categories; native regression coverage | src/providers/network_diagnostics.h
+Production native: flow/static review; native fixtures | src/providers/provider_gateway.cpp
+Production native: flow/static review; native fixtures | src/providers/provider_gateway.h
+Production native: flow/static review; native fixtures | src/services/artifact_manager.cpp
+Production native: flow/static review; native fixtures | src/services/artifact_manager.h
+Production native: flow/static review; native fixtures | src/services/attachment_import_manager.cpp
+Production native: flow/static review; native fixtures | src/services/attachment_import_manager.h
+Production native: flow/static review; native fixtures | src/services/budget_manager.cpp
+Production native: flow/static review; native fixtures | src/services/budget_manager.h
+Production native: flow/static review; native fixtures | src/services/credential_store.cpp
+Production native: flow/static review; native fixtures | src/services/credential_store.h
+Production native: flow/static review; native fixtures | src/services/model_catalog_manager.cpp
+Production native: flow/static review; native fixtures | src/services/model_catalog_manager.h
+Production native: flow/static review; native fixtures | src/services/upload_manager.cpp
+Production native: flow/static review; native fixtures | src/services/upload_manager.h
+Historical image: inventoried, unused by new production branding; retained | store-listing/screenshots/01-table.png
+Historical image: inventoried, unused by new production branding; retained | store-listing/screenshots/02-transcript.png
+Historical image: inventoried, unused by new production branding; retained | store-listing/screenshots/03-log.png
+Historical image: inventoried, unused by new production branding; retained | store-listing/screenshots/tablet-01-table-2560x1440.png
+Historical image: inventoried, unused by new production branding; retained | store-listing/screenshots/tablet-02-drawer-2560x1440.png
+Historical image: inventoried, unused by new production branding; retained | store-listing/screenshots/tablet-03-transcript-2560x1440.png
+Test infrastructure/fixture: host execution or opt-in measurement; see report | tests/CMakeLists.txt
+Test infrastructure/fixture: host execution or opt-in measurement; see report | tests/java/com/aimeetingtable/mobile/BoundedStreamCopierTest.java
+Test infrastructure/fixture: host execution or opt-in measurement; see report | tests/measure_mobile.cpp
+Test infrastructure/fixture: host execution or opt-in measurement; see report | tests/qml/tst_mobile.qml.in
+Test infrastructure/fixture: host execution or opt-in measurement; see report | tests/qml/tst_performance.qml.in
+Test infrastructure/fixture: host execution or opt-in measurement; see report | tests/qml/tst_transcript_scroll.qml.in
+Test infrastructure/fixture: host execution or opt-in measurement; see report | tests/run_attachment_import_java_tests.cmake
+Test infrastructure/fixture: host execution or opt-in measurement; see report | tests/test_async.cpp
+Test infrastructure/fixture: host execution or opt-in measurement; see report | tests/test_controller.cpp
+Test infrastructure/fixture: host execution or opt-in measurement; see report | tests/test_core.cpp
+Test infrastructure/fixture: host execution or opt-in measurement; see report | tests/test_database.cpp
+Test infrastructure/fixture: host execution or opt-in measurement; see report | tests/test_model_catalog.cpp
+Test infrastructure/fixture: host execution or opt-in measurement; see report | tests/test_provider_gateway.cpp
+Test infrastructure/fixture: host execution or opt-in measurement; see report | tests/test_qml.cpp
+Test infrastructure/fixture: host execution or opt-in measurement; see report | tests/test_startup_timeline.cpp
+Test infrastructure/fixture: host execution or opt-in measurement; see report | tests/verify_source_hygiene.cmake

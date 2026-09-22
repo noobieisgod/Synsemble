@@ -1,77 +1,83 @@
-# Mobile UI Documentation
+# Synsemble mobile interface
 
-## Phase 3 direction
+The conversation is the main workspace. The app bar contains Synsemble and the drawer button. A separate table-level header shows the table title, phase, Team and Details. Table controls are hidden in Settings. The drawer contains table switching/creation, one Table actions menu (rename, pin, duplicate, delete), and side-by-side Quick guide/Settings buttons. There is no bottom navigation bar.
 
-The production Qt Quick interface follows the approved transcript-first Session direction. The primary destinations are, in order, Tables, Session, Event Log, and Settings. Phones use a bottom navigation bar with Settings at the far right. Wider windows use a sidebar with Settings as the final item. Artifacts remain part of Session rather than primary navigation.
+At 1000 logical pixels the table drawer stays visible; at 1280 the details panel reserves space beside the conversation. Narrow layouts use an overlay sheet. Major overlays use window coordinates and apply safe-area spacing once, including the table drawer, Team/Details sheet and artifact preview. The bounded Welcome guide is centered within the usable safe area, including keyboard inset. Back dismisses an open dropdown before its owning dialog/page, then other dialogs/menus, then the details sheet, then the transient drawer, then Settings.
 
-Responsive behavior is implemented with native Qt Quick layouts. Phones use a single content column. Tablet and landscape layouts place the transcript beside a practical-width session panel. Both columns remain aligned to the top when extra vertical space is available.
+## Reachable features
 
-## Tables
+| Feature | Location |
+| --- | --- |
+| Table create/switch/pin/rename/duplicate/delete | Table drawer |
+| Add/edit/remove individual agents | Empty-state Add agent; Team editor with confirmed Remove agent |
+| Task/message entry; import/cancel attachment | Composer |
+| Attachment open/remove | Team details |
+| State-specific action | Composer area and Usage controls; see the mapping below |
+| Explicit Stop; full transcript copy | Session-details footer |
+| Artifact records and full preview | Artifacts details |
+| Sanitized events and diagnostics | Activity details |
+| Rounds, elapsed time, input/output/total tokens | Usage details |
+| Keys, models, limits, safeguards, appearance | Settings: Providers and models, Workflow limits, Appearance |
+| Quick guide | Automatic once after initialization; reopen from the drawer footer |
 
-Tables presents existing meeting tables, their state, participants, and recent activity. The page provides create, open, duplicate, pin, rename, and delete actions through visible touch controls. Long titles and descriptions wrap or elide within their allocated space.
+## Behavioral rules
 
-## Session
+New tables contain zero agents. Each seat represents one agent with name, provider, model, role, and color. Existing advanced options and decision-making-role validation remain. Invalid edits retain their input and show an error.
 
-Session keeps the transcript as the primary workspace. The supporting column contains telemetry, Seats, Attachments, Generation, and Artifacts. The composer provides a taller multiline message field with compact attachment and Send controls. It grows to a practical limit, then scrolls internally so long instructions remain editable without hiding the actions.
+The occupied-seat switch is no longer shown. Remove agent reuses the existing inactive slot, preserves prior contributions and stable IDs, and respects decision-maker validation and deferred changes during running sessions. It does not delete transcript history.
 
-The primary session action maps backend state to one visible control:
+Submitting a task starts a valid idle session. Configuration failures preserve the composer. Drafts and transcript scroll positions are kept per table during the current process; drafts are not newly persisted across restart. A stable trailing gutter keeps transcript text clear of its scrollbar. New messages follow only while already near the bottom. Latest messages returns to the end.
 
-- Never started: Start
-- Running: Pause
-- Paused after running: Continue
+The idle composer says Start task with short guidance; active sessions use Send with a separate state-specific Pause/Resume/Continue action. The attachment affordance is a native plus symbol with the accessible name Add attachment. Cancel import remains explicit. Vertical ScrollViews constrain content width; Settings drag regression checks cover all three categories.
 
-Stop is a separate action. Stopping a previously run session preserves its prior-run state, so the next valid primary action is Continue rather than Start.
+Manual Pause resumes with Resume. A configured hard stop offers Continue for exactly one pending operation; completed calls are not replayed and later limits pause again. Outcome-unknown operations expose no replay action, including after restore and Stop. The conservative unknown-outcome handler also discards other remaining callbacks from that run. Locked sessions reject message and attachment mutations, preserve typed drafts, and offer a confirmed fresh table copy with team/settings only. Original history remains intact; nothing is submitted automatically.
 
-Seat cards open the seat editor. Newly added seats are active by default, so Add Seat no longer exposes the stored occupied flag. Each seat stores a name, role, provider, model, and accent color through the controller model. The normal editor offers Blue, Cyan, Green, Amber, Orange, Red, Purple, and Pink with named swatches. Existing custom hexadecimal colors remain visible as Custom until the user selects a preset. Changing a seat color updates existing transcript message accents immediately. Messages also retain speaker names and roles, so color is not the only identifier. Invalid color values use a visible fallback.
+Picker completion retains the originating table ID. Existing attachment ownership, size, count, and traversal checks remain. Artifact preview uses existing artifact records without a new persistence schema.
 
-Attachments use the existing picker beside the composer and the backend import path. The Session attachment panel lists imported files and no longer duplicates the import action. Android content is copied into app-private storage before hashing and upload. The backend owns attachment size and file-count safeguards. As a post-test enhancement, tapping a completed attachment asks Android to open a protected, read-only content URI through a compatible application. Raw file URIs and unrestricted filesystem paths are not exposed. Generation and artifact controls use existing controller operations. Provider outcome-unknown states are shown without automatic replay.
+Completed sessions with saved artifacts show: "Your final result is ready. Tap Team, then choose Artifacts to read it." The quick guide also explains this route. Sessions without artifacts do not claim a saved final result; existing recovery guidance and Run again remain unchanged.
 
-Provider adapters accept only provider-specific user-visible response fields. OpenAI output text and supported refusal blocks are extracted explicitly. Anthropic text blocks are extracted while thinking, signatures, metadata, and other non-visible blocks are ignored. A malformed response or a response without visible content is recorded as a redacted failure and pauses the recoverable session instead of entering opaque data into the transcript or completing the phase. Outcome-unknown requests remain paused for explicit user continuation and are never automatically replayed.
+Switching tables closes the old table's editor, artifact preview and continuation notice. Startup refuses to initialize after an incomplete database restore rather than treating unreadable records as an empty app or cleaning up their files.
 
-Usage telemetry shows input, output, and total token counts and prefers final provider-reported usage. When usage must be estimated, the total says Approx. Known partial usage from a definite provider failure is retained once, while outcome-unknown usage remains unconfirmed. Monetary cost controls, telemetry, pricing estimates, and execution stops are retired because pricing cannot be enforced reliably across every supported model. Legacy stored cost fields remain readable for compatibility but do not affect execution. Token, round, loop, phase-time, and session-time hard stops remain backend-owned.
+## State/action contract
 
-When a meeting hard stop is reached, the whole session pauses before the pending workflow operation advances. No hard stop creates a normal skipped turn. Continue is an explicit, one-operation override for the specific user-configured meeting limit that blocked progress. It resumes the exact pending phase, round, seat, and revision operation while preserving transcript entries, artifacts, counters, and token totals. Normal limit enforcement resumes after that operation, so a later limit pauses again. If final provider usage crosses a token limit, the completed response and its usage are retained once, then the session pauses before the next operation. The pending operation and pause reason persist across restart. Continue cannot override provider outcome-unknown protection, malformed responses, security checks, attachment safeguards, cancellation, or Stop.
+Presentation fields `nextAction`, `actionLabel`, `actionHint`, `latestFailure`, `canSubmit` and `statusLabel` are derived in C++; no new persisted schema is introduced. The original phase field remains unchanged.
 
-Sequential Planning, Execution, and Quality Control turns place the phase lead after participant input. Participants are prompted to add only concise new information. The Lead Executioner produces or patches the authoritative artifact directly and silently checks requested headings, counts, limits, prohibited claims, and unresolved blocking findings. Lead Quality Control consolidates blocking issues, optional improvements, open findings, and resolved findings in one review. Resolved findings are not reopened without new contradictory evidence, and optional wording changes do not require another execution loop. Continuation preserves the transcript, artifact, findings context, counters, and exact pending action.
+| State | Visible next action | Meaning |
+| --- | --- | --- |
+| No table | Create table | Explicit empty-table creation |
+| Idle | Start task | Validate configuration, then submit and start |
+| Research/Planning/Execution/Quality Control/Present | Pause | Existing workflow proceeds; in-flight calls are not replayed |
+| Manual pause with a saved operation | Resume | Resume only the pending operation |
+| Configured hard stop | Continue | One-operation override; later limits can pause again |
+| Rejected unusable response with saved retry command | Retry operation | Confirmation warns of additional usage; no automatic replay |
+| Definite rejection while other research/turns continue | Pause + Providers and models | Explain continuation without the failed response; Activity has details |
+| Definite failure that ends the run | Run again + Providers and models | Explicit confirmed new run after configuration correction, not an automatic retry of only the failed turn |
+| Completed/Stopped/Failed | Run again | Explicit confirmed new run with existing task/history |
+| Unknown outcome, including restored or stopped unknown work | Create fresh table | No replay; confirmed team/settings copy with a new stable table ID |
+| Paused legacy/incomplete state without a saved operation | Create fresh table | Do not invent a resumable operation |
 
-## Event Log
+Sending while paused adds instructions without resuming. Outcome-unknown sessions cannot submit. Fresh-copy and new-run confirmations close when switching tables; save failure keeps the original selection.
 
-Event Log presents session, provider, attachment, generation, and artifact events using the existing event model. Entries wrap long content and preserve state labels that do not rely on color alone.
+## Privacy and appearance
 
-## Settings
+Provider adapters select visible response fields. Presentation filtering additionally removes recognized private envelopes, hidden blocks, auth headers, key patterns, and exact current credentials. Stored context is not rewritten. This is defense in depth, not a guarantee that arbitrary free-form sensitive text can be recognized.
 
-Settings is a full primary page with focused subsections:
+Credentials show Saved/Not saved only. Replacement fields begin empty and clear after successful saving. Workflow decisions remain in C++; monetary telemetry remains absent.
 
-- Providers: secure OpenAI, Gemini, and Anthropic credential entry and status
-- Models: provider defaults and supported model choices
-- Global hard stops: backend-enforced token, round, Execution/Quality Control loop, phase-time, and session-time limits
-- Attachment safeguards: backend-owned fixed limits and explanatory status
-- Appearance: Light, Dark, or System appearance; Signal Session or Calm Workspace color theme; System, Workspace, or Console system-font preference
+Each provider has an independent Refresh models action and busy/status display on the same page as its key. Saving a key or opening Settings does not automatically refresh. Explicit refresh sends that provider's saved credential to its model-list endpoint. TLS error 6 means a secure connection failure, not proof of an invalid key. Safe categories distinguish issuer, chain, self-signed, validity and hostname failures. Generation transport separately classifies definite rejection/pre-execution failure and uncertain execution. No automatic generation retry remains. Failed refresh retains the previous or built-in model list; it does not switch providers or prove a session request will succeed.
 
-Persisted credentials use the existing secure credential store. QML receives only whether a provider credential exists and displays Saved or Not saved. It receives no stored key, masked hint, prefix, suffix, or fingerprint. Replacement fields start empty, clear after saving, use password masking, and do not log or copy credentials. Show affects only replacement text currently typed by the user. Provider calls, hard-stop enforcement, attachment safeguards, and retry decisions remain in C++ and backend services.
+Warm neutral light surfaces, charcoal dark surfaces, muted teal, and native Qt controls replace the dashboard. Calm Workspace retains its warm accent. Light, Dark, System, and existing font preferences are preserved. System typography uses the platform application default unless overridden by the saved font preference.
 
-Appearance changes update the interface without replacing active session state. The two color themes have intentional light and dark palettes. Font preferences use installed system font stacks and require no downloaded assets.
+In-app light/dark marks share the existing geometry and use transparent backgrounds at equal scale; launcher backgrounds are preserved.
 
-## Accessibility and responsive behavior
+Workspace uses bundled Inter and Console uses bundled JetBrains Mono, including bold weights. System remains the platform font. Upstream licenses and font provenance are included in `branding/fonts`. There is no Live preview card or runtime font download. The quick guide uses the existing QSettings namespace (`ui/quickGuideSeen`), never creates tables/agents, and can be dismissed with Back or reopened in Settings.
 
-- Navigation follows the same Tables, Session, Event Log, Settings order visually and by keyboard.
-- Qt Quick Controls provide semantic roles, keyboard focus, and touch-sized hit areas.
-- Bottom navigation fits four destinations at phone width without horizontal scrolling.
-- Transcript metadata reflows on narrow screens, and long names, roles, models, filenames, and messages wrap or elide intentionally.
-- Dialogs have visible close or save actions and remain within the viewport.
-- Seat identity, session state, validation, and provider status include text in addition to color.
-- Light and dark palettes maintain readable foreground, surface, focus, and seat-accent combinations.
-- Android Back closes a nested Settings subsection before leaving Settings. Dialogs provide explicit close or save controls.
-- Android top and bottom surfaces extend to the physical edges while their controls use Qt safe-area margins for status bars, cutouts, gesture navigation, and navigation bars.
+The monochrome three-stroke symbol has light/dark SVG and PNG variants. Android adaptive and legacy launcher assets are reproduced with `branding/export-icons.ps1`.
 
-The layout targets are 360 by 800, 412 by 915, 800 by 1280, and 1280 by 800. Pixel 10 Pro emulator testing confirmed portrait, landscape, gesture navigation, safe areas, light and dark appearances, long text, model refresh, named seat colors, attachment import, and readable provider responses. The Add Seat dialog is explicitly positioned in the full-window overlay and centered inside the current safe-area viewport, with internal scrolling when height is constrained.
+## Validation boundaries
 
-## Validation and known limitations
+See [Mobile review](MOBILE_REVIEW.md) for evidence and remaining work. Offline QML fixtures exercise drafts, pause labels, sheet/drawer Back order, and representative screens. Set `SYNSEMBLE_CAPTURE_DIR` to an existing directory to export screenshots through `test_qml`.
 
-Desktop Qt compilation, QML linting, controller tests, QML tests, and the full native test set are part of Phase 3 validation. The QML test uses Qt's offscreen platform so it also runs in noninteractive environments.
+Windows QML tests use native windows with software rendering; other hosts retain offscreen configuration. Real Back-key fixtures cover dialog/sheet/drawer precedence. An isolated Android emulator also verified those dismissals, validation-dialog Back, keyboard/composer separation and retained invalid-task text. The manifest retains Qt's key-event Back dispatch; modal dialogs use zero decorative elevation for software-renderer compatibility.
 
-The Android arm64 debug build configures and packages with the repository's existing Qt, SDK, NDK, Gradle, and CMake process. The post-test correction build completed successfully with Qt 6.11.1 and target API 36. Pixel 10 Pro emulator testing subsequently confirmed the safe-area behavior, orientation changes, gesture navigation, clean-data startup, long composer input, model refresh, named seat colors, and visible provider response extraction.
-
-Model catalog refresh status is provider-specific and moves through not refreshed, refreshing, updated, or refresh failed text. A failed refresh keeps the previously loaded or built-in catalog and does not expose credential data. The status is session-only because dynamic model catalogs are not persisted across launches.
-
-The user completed a provider smoke test after the fixture-based response correction and confirmed readable output from the supported providers without opaque reasoning or transport payloads. Release signing, tagging, and publication remain outside this phase.
+Host captures and the translated emulator do not establish physical-device graphics, safe-area coverage, TalkBack, large-text or process-death correctness. The review records those remaining checks and emulator rendering defects. An existing debug key was authorized solely for the disposable emulator APK. Release signing, publication, pushes and version changes remain outside this work.
