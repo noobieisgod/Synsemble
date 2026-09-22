@@ -21,7 +21,7 @@ public:
     ~DatabaseManager() override;
 
     bool initialize();
-    QVector<SessionState> loadTables();
+    QVector<SessionState> loadTables(bool *success = nullptr);
     bool saveTable(const SessionState &state);
     bool deleteTable(const QString &tableId);
 
@@ -33,9 +33,9 @@ private:
     int rowCount(const QString &tableName, const QString &tableId = {}) const;
     void logDatabaseFileState(const QString &context) const;
     void logTableRowCounts(const QString &context, const QString &tableId) const;
-    void loadTranscript(SessionState &state) const;
-    void loadLog(SessionState &state) const;
-    void loadArtifacts(SessionState &state) const;
+    bool loadTranscript(SessionState &state) const;
+    bool loadLog(SessionState &state) const;
+    bool loadArtifacts(SessionState &state) const;
     QString databasePath() const;
     QString connectionName() const;
 

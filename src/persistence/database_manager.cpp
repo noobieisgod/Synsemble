@@ -344,8 +344,9 @@ void DatabaseManager::logTableRowCounts(const QString &context, const QString &t
                                   QString::number(rowCount("log_events", tableId)));
 }
 
-QVector<SessionState> DatabaseManager::loadTables()
+QVector<SessionState> DatabaseManager::loadTables(bool *success)
 {
+    if (success) *success = false;
     QVector<SessionState> tables;
     qint64 tableRestoreMs = 0;
     qint64 transcriptRestoreMs = 0;
@@ -403,8 +404,14 @@ QVector<SessionState> DatabaseManager::loadTables()
         for (const auto &seatValue : pendingSeatArray) {
             state.pendingSeats.append(seatFromJson(seatValue.toObject()));
         }
-        const auto attachmentArray = QJsonDocument::fromJson(query.value(20).toByteArray()).array();
+        const auto attachmentDocument = QJsonDocument::fromJson(query.value(20).toByteArray());
+        if (!attachmentDocument.isArray()) {
+            qWarning() << "Database restore failed: invalid attachment references";
+            return {};
+        }
+        const auto attachmentArray = attachmentDocument.array();
         for (const auto &attachmentValue : attachmentArray) {
+            if (!attachmentValue.isObject()) return {};
             state.attachments.append(attachmentFromJson(attachmentValue.toObject()));
         }
         for (const auto &queuedValue : QJsonDocument::fromJson(query.value(21).toByteArray()).array()) {
@@ -435,13 +442,13 @@ QVector<SessionState> DatabaseManager::loadTables()
         state.execQcLoopCount = query.value(33).toInt();
         tableRestoreMs += restoreTimer.elapsed();
         restoreTimer.restart();
-        loadTranscript(state);
+        if (!loadTranscript(state)) return {};
         transcriptRestoreMs += restoreTimer.elapsed();
         restoreTimer.restart();
-        loadLog(state);
+        if (!loadLog(state)) return {};
         logRestoreMs += restoreTimer.elapsed();
         restoreTimer.restart();
-        loadArtifacts(state);
+        if (!loadArtifacts(state)) return {};
         artifactRestoreMs += restoreTimer.elapsed();
         PersistedChildIds childIds;
         for (const auto &entry : state.transcript) {
@@ -460,6 +467,8 @@ QVector<SessionState> DatabaseManager::loadTables()
                                        QString::number(state.log.size()));
         tables.append(state);
     }
+    if (query.lastError().isValid()) return {};
+    if (success) *success = true;
     if (diagnosticsLog().isDebugEnabled()) {
         qCDebug(diagnosticsLog).noquote() << QString("Database load summary: tables=%1 totalTranscript=%2 totalArtifacts=%3 totalLogs=%4")
                                  .arg(QString::number(tables.size()),
@@ -745,6 +754,7 @@ bool DatabaseManager::saveTable(const SessionState &state)
     }
     if (!m_db.commit()) {
         qWarning().noquote() << QString("Database save failed: commit table=%1 error=%2").arg(state.tableId, m_db.lastError().text());
+        m_db.rollback();
         return false;
     }
     m_persistedChildIds.insert(state.tableId, PersistedChildIds{retainedTranscriptIds, retainedLogIds, retainedArtifactIds});
@@ -757,7 +767,7 @@ bool DatabaseManager::saveTable(const SessionState &state)
     return true;
 }
 
-void DatabaseManager::loadTranscript(SessionState &state) const
+bool DatabaseManager::loadTranscript(SessionState &state) const
 {
     QSqlQuery query(m_db);
     const bool hasEntryType = transcriptEntriesColumnExists("entry_type");
@@ -767,7 +777,7 @@ void DatabaseManager::loadTranscript(SessionState &state) const
     query.addBindValue(state.tableId);
     if (!query.exec()) {
         qWarning().noquote() << QString("Database load failed: transcript table=%1 error=%2").arg(state.tableId, query.lastError().text());
-        return;
+        return false;
     }
     const QList<Phase> phases = {Phase::Idle, Phase::Research, Phase::Planning, Phase::Execution, Phase::QualityControl, Phase::Present, Phase::Paused, Phase::Completed, Phase::Stopped, Phase::Failed};
     while (query.next()) {
@@ -799,16 +809,17 @@ void DatabaseManager::loadTranscript(SessionState &state) const
         }
         state.transcript.append(entry);
     }
+    return !query.lastError().isValid();
 }
 
-void DatabaseManager::loadLog(SessionState &state) const
+bool DatabaseManager::loadLog(SessionState &state) const
 {
     QSqlQuery query(m_db);
     query.prepare("SELECT log_id, type, actor_seat_id, actor_name, phase, round_no, timestamp, summary FROM log_events WHERE table_id = ? ORDER BY timestamp, rowid");
     query.addBindValue(state.tableId);
     if (!query.exec()) {
         qWarning().noquote() << QString("Database load failed: log table=%1 error=%2").arg(state.tableId, query.lastError().text());
-        return;
+        return false;
     }
     const QList<Phase> phases = {Phase::Idle, Phase::Research, Phase::Planning, Phase::Execution, Phase::QualityControl, Phase::Present, Phase::Paused, Phase::Completed, Phase::Stopped, Phase::Failed};
     while (query.next()) {
@@ -830,16 +841,17 @@ void DatabaseManager::loadLog(SessionState &state) const
         entry.summary = query.value(7).toString();
         state.log.append(entry);
     }
+    return !query.lastError().isValid();
 }
 
-void DatabaseManager::loadArtifacts(SessionState &state) const
+bool DatabaseManager::loadArtifacts(SessionState &state) const
 {
     QSqlQuery query(m_db);
     query.prepare("SELECT version_id, parent_version_id, phase, round_no, created_at, summary, file_path FROM artifact_versions WHERE table_id = ? ORDER BY created_at, rowid");
     query.addBindValue(state.tableId);
     if (!query.exec()) {
         qWarning().noquote() << QString("Database load failed: artifacts table=%1 error=%2").arg(state.tableId, query.lastError().text());
-        return;
+        return false;
     }
     const QList<Phase> phases = {Phase::Idle, Phase::Research, Phase::Planning, Phase::Execution, Phase::QualityControl, Phase::Present, Phase::Paused, Phase::Completed, Phase::Stopped, Phase::Failed};
     while (query.next()) {
@@ -862,6 +874,7 @@ void DatabaseManager::loadArtifacts(SessionState &state) const
     if (state.currentArtifactVersionId.isEmpty() && !state.artifacts.isEmpty()) {
         state.currentArtifactVersionId = state.artifacts.constLast().versionId;
     }
+    return !query.lastError().isValid();
 }
 
 QString DatabaseManager::databasePath() const
@@ -888,7 +901,7 @@ bool DatabaseManager::deleteTable(const QString &tableId)
 
     SessionState state;
     state.tableId = tableId;
-    loadArtifacts(state);
+    if (!loadArtifacts(state)) return false;
 
     if (!m_db.transaction()) {
         return false;
@@ -920,6 +933,7 @@ bool DatabaseManager::deleteTable(const QString &tableId)
         return false;
     }
     if (!m_db.commit()) {
+        m_db.rollback();
         return false;
     }
 

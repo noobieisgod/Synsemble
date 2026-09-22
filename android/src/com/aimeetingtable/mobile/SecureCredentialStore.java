@@ -27,7 +27,7 @@ public final class SecureCredentialStore {
             SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
             if (value == null || value.trim().isEmpty()) {
                 if (allowDelete) {
-                    prefs.edit().remove(target).apply();
+                    return prefs.edit().remove(target).commit();
                 }
                 return true;
             }
@@ -37,8 +37,7 @@ public final class SecureCredentialStore {
             byte[] iv = cipher.getIV();
             byte[] encrypted = cipher.doFinal(value.getBytes(StandardCharsets.UTF_8));
             String packed = Base64.encodeToString(iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(encrypted, Base64.NO_WRAP);
-            prefs.edit().putString(target, packed).apply();
-            return true;
+            return prefs.edit().putString(target, packed).commit();
         } catch (Exception exception) {
             return false;
         }

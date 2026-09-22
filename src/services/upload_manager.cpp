@@ -57,8 +57,9 @@ QString UploadManager::computeFileHash(const QString &filePath, QString *error) 
         return {};
     }
     QCryptographicHash hash(QCryptographicHash::Sha256);
-    while (!file.atEnd()) {
-        hash.addData(file.read(8192));
+    if (!hash.addData(&file)) {
+        if (error) *error = "Failed to read the complete attachment.";
+        return {};
     }
     return QString::fromUtf8(hash.result().toHex());
 }

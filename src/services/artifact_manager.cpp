@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QDebug>
 #include <QFile>
+#include <QSaveFile>
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QUuid>
@@ -30,19 +31,17 @@ ArtifactVersion ArtifactManager::createVersion(SessionState &state, Phase phase,
     version.filePath = artifactContentPath(version.versionId);
 
     QDir().mkpath(QFileInfo(version.filePath).absolutePath());
-    QFile file(version.filePath);
+    QSaveFile file(version.filePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
         m_lastError = "Failed to create the local artifact file.";
         return {};
     }
 
-    if (file.write(content.toUtf8()) < 0) {
+    const QByteArray bytes = content.toUtf8();
+    if (file.write(bytes) != bytes.size() || !file.commit()) {
         m_lastError = "Failed to write the local artifact file.";
-        file.close();
-        QFile::remove(version.filePath);
         return {};
     }
-    file.close();
 
     state.currentArtifactVersionId = version.versionId;
     state.artifacts.append(version);

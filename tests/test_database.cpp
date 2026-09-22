@@ -51,7 +51,68 @@ class DatabaseTests final : public QObject {
 private slots:
   void incrementalDeltaRoundTripAndIndexes();
   void legacyTranscriptSchemaMigrates();
+  void failedCommitCanBeRetried();
+  void failedRestoreIsNotAnEmptyDatabase();
 };
+
+void DatabaseTests::failedRestoreIsNotAnEmptyDatabase() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString connection = QUuid::createUuid().toString();
+  DatabaseManager manager(directory.filePath("restore-failure.db"), connection);
+  bool restored = true;
+  QVERIFY(manager.loadTables(&restored).isEmpty());
+  QVERIFY(!restored);
+  QVERIFY(manager.initialize());
+  QVERIFY(manager.loadTables(&restored).isEmpty());
+  QVERIFY(restored);
+  QVERIFY(manager.saveTable(makeState(1)));
+  auto database = QSqlDatabase::database(connection);
+  QSqlQuery query(database);
+  QVERIFY(query.exec("UPDATE meeting_tables SET attachments_json='{'"));
+  QVERIFY(manager.loadTables(&restored).isEmpty());
+  QVERIFY(!restored);
+  QVERIFY(query.exec("UPDATE meeting_tables SET attachments_json='[1]'"));
+  QVERIFY(manager.loadTables(&restored).isEmpty());
+  QVERIFY(!restored);
+  QVERIFY(query.exec("UPDATE meeting_tables SET attachments_json='[]'"));
+  for (const QString table : {"transcript_entries", "log_events", "artifact_versions", "meeting_tables"}) {
+    QVERIFY(query.exec("ALTER TABLE " + table + " RENAME TO unavailable"));
+    QVERIFY(manager.loadTables(&restored).isEmpty());
+    QVERIFY(!restored);
+    QVERIFY(query.exec("ALTER TABLE unavailable RENAME TO " + table));
+    QCOMPARE(manager.loadTables(&restored).size(), 1);
+    QVERIFY(restored);
+  }
+}
+
+void DatabaseTests::failedCommitCanBeRetried() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString connection = QUuid::createUuid().toString();
+  DatabaseManager manager(directory.filePath("commit-failure.db"), connection);
+  QVERIFY(manager.initialize());
+  auto state = makeState(1);
+  QVERIFY(manager.saveTable(state));
+  auto database = QSqlDatabase::database(connection);
+  QSqlQuery query(database);
+  QVERIFY(query.exec("PRAGMA foreign_keys=ON"));
+  QVERIFY(query.exec("CREATE TABLE fixture_parent (id INTEGER PRIMARY KEY)"));
+  QVERIFY(query.exec("CREATE TABLE fixture_child (id INTEGER REFERENCES fixture_parent(id) DEFERRABLE INITIALLY DEFERRED)"));
+  QVERIFY(query.exec("CREATE TRIGGER fixture_failure AFTER UPDATE ON meeting_tables BEGIN INSERT INTO fixture_child VALUES (42); END"));
+  state.title = "Must not persist yet";
+  QVERIFY(!manager.saveTable(state));
+  QCOMPARE(manager.loadTables().first().title, QString("Persistence test"));
+  QVERIFY(query.exec("DROP TRIGGER fixture_failure"));
+  QVERIFY(manager.saveTable(state));
+  QCOMPARE(manager.loadTables().first().title, state.title);
+  QVERIFY(query.exec("CREATE TRIGGER fixture_failure AFTER DELETE ON meeting_tables BEGIN INSERT INTO fixture_child VALUES (42); END"));
+  QVERIFY(!manager.deleteTable(state.tableId));
+  QCOMPARE(manager.loadTables().size(), 1);
+  QVERIFY(query.exec("DROP TRIGGER fixture_failure"));
+  QVERIFY(manager.deleteTable(state.tableId));
+  QVERIFY(manager.loadTables().isEmpty());
+}
 
 void DatabaseTests::incrementalDeltaRoundTripAndIndexes() {
   QTemporaryDir temporaryDirectory;
