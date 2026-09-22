@@ -11,9 +11,11 @@
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QNetworkProxy>
 
 #include "app/application_context.h"
 #include "app/mobile_app_controller.h"
+#include "core/visible_text.h"
 
 using namespace amt;
 
@@ -35,9 +37,285 @@ private slots:
   void tableDeletionDuringImportRemovesCompletedResult();
   void staleAttachmentCompletionIsIgnored();
   void startupCleanupPreservesOwnedAttachments();
+  void invalidComposerTaskDoesNotModifySession();
+  void validComposerStartsAndPausesBeforeNetwork();
+  void backgroundFlushSavesOriginatingTables();
+  void presentationRedactsPrivateContent();
+  void outcomeUnknownCannotResumeAfterRestore();
+  void interruptedRequestsRestoreWithoutReplay();
+  void uninitializedStorageCannotCreateTable();
+  void duplicateResetsRuntimeUsage();
+  void guideAndAgentRemovalPersist();
+  void everyStateHasNextAction();
+  void completedArtifactGuidance();
 };
 
+void ControllerTests::completedArtifactGuidance() {
+  MobileAppController controller;
+  QVERIFY(controller.initialize());
+  QVERIFY(controller.createTable("Artifact guidance"));
+  auto state = controller.currentHandle();
+  state->phase = Phase::Completed;
+  const QString guidance = "Your final result is ready. Tap Team, then choose Artifacts to read it.";
+  QVERIFY(!controller.currentTable().value("actionHint").toString().contains(guidance));
+  state->artifacts.append(ArtifactVersion{});
+  QVERIFY(controller.currentTable().value("actionHint").toString().startsWith(guidance));
+  QCOMPARE(controller.currentTable().value("actionLabel").toString(), QString("Run again"));
+  LogEvent error;
+  error.type = LogEventType::ProviderCallFailed;
+  error.summary = "Provider rejected the request";
+  state->log.append(error);
+  QVERIFY(controller.currentTable().value("actionHint").toString().startsWith(guidance));
+  QVERIFY(controller.currentTable().value("actionHint").toString().contains("provider failure"));
+  for (const auto phase : {Phase::Stopped, Phase::Failed, Phase::Research}) {
+    state->phase = phase;
+    QVERIFY(!controller.currentTable().value("actionHint").toString().contains(guidance));
+  }
+  state->phase = Phase::Completed;
+  state->artifacts.clear();
+  QVERIFY(!controller.currentTable().value("actionHint").toString().contains(guidance));
+}
+
+void ControllerTests::everyStateHasNextAction() {
+  MobileAppController controller;
+  QVERIFY(controller.initialize());
+  QVERIFY(controller.createTable("Actions"));
+  auto state = controller.currentHandle();
+  struct Case { Phase phase; const char *action; const char *label; };
+  for (const auto &c : {Case{Phase::Idle, "start", "Start task"},
+       Case{Phase::Research, "pause", "Pause"}, Case{Phase::Planning, "pause", "Pause"},
+       Case{Phase::Execution, "pause", "Pause"}, Case{Phase::QualityControl, "pause", "Pause"},
+       Case{Phase::Present, "pause", "Pause"}, Case{Phase::Completed, "restart", "Run again"},
+       Case{Phase::Stopped, "restart", "Run again"}, Case{Phase::Failed, "restart", "Run again"}}) {
+    state->phase = c.phase;
+    QCOMPARE(controller.currentTable().value("nextAction").toString(), QString(c.action));
+    QCOMPARE(controller.currentTable().value("actionLabel").toString(), QString(c.label));
+    QVERIFY(!controller.currentTable().value("actionHint").toString().isEmpty());
+  }
+  state->phase = Phase::Paused; state->paused = true;
+  state->continuationCommand.commandType = RunnerCommandType::RequestSeatTurn;
+  QCOMPARE(controller.currentTable().value("nextAction").toString(), QString("resume"));
+  state->continuationPending = true;
+  QCOMPARE(controller.currentTable().value("nextAction").toString(), QString("continue"));
+  state->continuationPending = false;
+  state->continuationCommand.payload.insert("responseRejected", true);
+  QCOMPARE(controller.currentTable().value("nextAction").toString(), QString("retry"));
+  state->continuationCommand.payload.insert("outcomeUnknown", true);
+  QCOMPARE(controller.currentTable().value("nextAction").toString(), QString("fresh"));
+  QVERIFY(!controller.currentTable().value("canSubmit").toBool());
+  QVERIFY(!controller.submitTask("Must retain draft in UI"));
+  QVERIFY(!controller.sendMessage("Must not mutate transcript"));
+  QVERIFY(!controller.addAttachmentForTable(state->tableId, QUrl::fromLocalFile("missing")));
+  QVERIFY(!controller.runOrResume());
+  QVERIFY(controller.transcript().isEmpty());
+  QVERIFY(controller.flushCurrentSession());
+  QVERIFY(controller.duplicateCurrentTable());
+  QCOMPARE(controller.currentTable().value("nextAction").toString(), QString("start"));
+  QVERIFY(state->continuationCommand.payload.value("outcomeUnknown").toBool());
+  controller.selectTable(state->tableId);
+  state->continuationCommand = {}; state->phase = Phase::Stopped; state->paused = false;
+  LogEvent error; error.type = LogEventType::ProviderCallFailed; error.summary = "Gemini authentication rejected";
+  state->log.append(error);
+  QCOMPARE(controller.currentTable().value("nextAction").toString(), QString("restart"));
+  QVERIFY(controller.currentTable().value("actionHint").toString().contains("provider failure"));
+  state->phase = Phase::Research;
+  QVERIFY(controller.currentTable().value("actionHint").toString().contains("continuing"));
+  state->phase = Phase::Paused;
+  QCOMPARE(controller.currentTable().value("nextAction").toString(), QString("fresh"));
+  QVERIFY(!controller.runOrResume());
+}
+
+void ControllerTests::guideAndAgentRemovalPersist() {
+  QSettings settings;
+  settings.remove("ui/quickGuideSeen");
+  MobileAppController controller;
+  QVERIFY(controller.initialize());
+  QVERIFY(!controller.settings().value("quickGuideSeen").toBool());
+  QVERIFY(controller.acknowledgeQuickGuide());
+  QCOMPARE(settings.value("ui/quickGuideSeen").toBool(), true);
+  QVERIFY(controller.createTable("Removal fixture"));
+  QVERIFY(controller.saveSeat(0, true, "Decision", 0, "gpt-4.1-mini", 0, 1, "#16866c"));
+  QVERIFY(controller.saveSeat(1, true, "Planner", 0, "gpt-4.1-mini", 0, 0, "#16866c"));
+  QVERIFY(controller.sendMessage("Keep this history"));
+  const auto stableId = controller.currentHandle()->seats[1].seatId;
+  QVERIFY(!controller.removeAgent(0)); // Cannot remove the only decision maker with other active agents.
+  QVERIFY(controller.removeAgent(1));
+  QCOMPARE(controller.currentHandle()->seats[1].seatId, stableId);
+  QVERIFY(!controller.currentHandle()->seats[1].occupied);
+  QCOMPARE(controller.transcript().size(), 1);
+  QVERIFY(controller.saveSeat(1, true, "Replacement", 0, "gpt-4.1-mini", 0, 0, "#16866c"));
+  QCOMPARE(controller.currentHandle()->seats.size(), 2);
+  QCOMPARE(controller.currentHandle()->seats[1].seatId, stableId);
+  QVERIFY(controller.flushCurrentSession());
+  MobileAppController restored;
+  QVERIFY(restored.initialize());
+  QVERIFY(restored.settings().value("quickGuideSeen").toBool());
+  restored.selectTable(controller.currentTableId());
+  QCOMPARE(restored.currentHandle()->seats.size(), 2);
+  QCOMPARE(restored.transcript().size(), 1);
+}
+
+void ControllerTests::duplicateResetsRuntimeUsage() {
+  MobileAppController controller;
+  QVERIFY(controller.initialize());
+  QVERIFY(controller.createTable("Original"));
+  auto original = controller.currentHandle();
+  original->usedTokens = 123;
+  original->seatUsage.append(SeatUsageTally{});
+  original->usageEstimateUsed = true;
+  original->costEstimateComplete = false;
+  original->pendingResearchResponses = 2;
+  original->arbitrationSatisfied = true;
+  original->continuationCommand.payload.insert("outcomeUnknown", true);
+  QVERIFY(controller.duplicateCurrentTable());
+  const auto copy = controller.currentHandle();
+  QVERIFY(copy->tableId != original->tableId);
+  QCOMPARE(copy->usedTokens, 0);
+  QVERIFY(copy->seatUsage.isEmpty());
+  QVERIFY(!copy->usageEstimateUsed);
+  QVERIFY(copy->costEstimateComplete);
+  QCOMPARE(copy->pendingResearchResponses, 0);
+  QVERIFY(!copy->arbitrationSatisfied);
+  QVERIFY(copy->continuationCommand.payload.isEmpty());
+  QCOMPARE(original->usedTokens, 123);
+  QVERIFY(original->continuationCommand.payload.value("outcomeUnknown").toBool());
+}
+
+void ControllerTests::uninitializedStorageCannotCreateTable() {
+  MobileAppController controller;
+  QVERIFY(!controller.createTable("Must not save"));
+  QVERIFY(controller.tables().isEmpty());
+}
+
+void ControllerTests::invalidComposerTaskDoesNotModifySession() {
+  MobileAppController controller;
+  QVERIFY(controller.initialize());
+  QVERIFY(controller.createTable("Invalid task"));
+  QVERIFY(!controller.submitTask("Keep this draft"));
+  QVERIFY(controller.transcript().isEmpty());
+  QCOMPARE(controller.currentTable().value("phase").toString(), QString("Idle"));
+}
+
+void ControllerTests::validComposerStartsAndPausesBeforeNetwork() {
+  MobileAppController controller;
+  QVERIFY(controller.initialize());
+  QVERIFY(controller.createTable("Start task"));
+  QVERIFY(controller.saveSeat(0, true, "Decision", 0, "gpt-4.1-mini", 0, 1, "#16866c"));
+  QVERIFY(controller.saveSeat(1, true, "Planner", 0, "gpt-4.1-mini", 0, 0, "#16866c"));
+  QVERIFY(controller.saveApiKey(0, "fixture-not-a-real-key"));
+  // Exhaust the safety reserve before dispatch: this test cannot make provider calls.
+  controller.currentHandle()->useBudgetOverrides = true;
+  controller.currentHandle()->budgetOverrides.maxTotalTokens = 1;
+  controller.currentHandle()->budgetOverrides.maxTokensPerPhase = 1;
+  QVERIFY(controller.submitTask("Plan a synthetic example"));
+  QCOMPARE(controller.transcript().size(), 1);
+  QTRY_VERIFY(controller.currentTable().value("continuationPending").toBool());
+  QCOMPARE(controller.currentTable().value("phase").toString(), QString("Needs continuation"));
+  QVERIFY(controller.saveApiKey(0, ""));
+}
+
+void ControllerTests::backgroundFlushSavesOriginatingTables() {
+  MobileAppController controller;
+  QVERIFY(controller.initialize());
+  QVERIFY(controller.createTable("Origin"));
+  const auto origin = controller.currentHandle();
+  const QString originId = origin->tableId;
+  QVERIFY(controller.createTable("Foreground"));
+  origin->title = "Background result";
+  controller.schedulePersistence(originId);
+  QVERIFY(controller.flushCurrentSession());
+  QVERIFY(!controller.m_pendingSaveIds.contains(originId));
+  DatabaseManager database(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/ai_meeting_table.db", "flush-verification");
+  QVERIFY(database.initialize());
+  const auto restored = database.loadTables();
+  QVERIFY(std::any_of(restored.cbegin(), restored.cend(), [&](const SessionState &state) {
+    return state.tableId == originId && state.title == "Background result";
+  }));
+}
+
+void ControllerTests::presentationRedactsPrivateContent() {
+  MobileAppController controller;
+  QVERIFY(controller.initialize());
+  QVERIFY(controller.createTable("Redaction"));
+  QVERIFY(controller.saveApiKey(0, "fixture-private-credential"));
+  QVERIFY(controller.sendMessage("Visible\nAuthorization: Bearer secret\nfixture-private-credential\n<thinking>hidden</thinking>\nDone"));
+  const auto copied = controller.fullTranscriptText();
+  QVERIFY(copied.contains("Visible"));
+  QVERIFY(copied.contains("Done"));
+  QVERIFY(!copied.contains("fixture-private-credential"));
+  QVERIFY(!copied.contains("Bearer"));
+  QVERIFY(!copied.contains("hidden"));
+  QVERIFY(!controller.transcript().first().toMap().value("content").toString().contains("hidden"));
+  QCOMPARE(visibleText("{\"output\":[{\"type\":\"reasoning\"}]}"), QString("[Provider payload omitted]"));
+  QCOMPARE(visibleText("<signature>private</signature>"), QString("[Private content omitted]"));
+  QVERIFY(controller.sendMessage("{\"output\":[{\"text\":\"raw-private-body\"}]}"));
+  QVERIFY(!controller.fullTranscriptText().contains("raw-private-body"));
+  auto state = controller.currentHandle();
+  LogEvent event;
+  event.summary = "```json\n{\"signature\":\"private-signature\"}\n```";
+  event.actorName = "fixture-private-credential";
+  state->log.append(event);
+  const auto activity = controller.logs().last().toMap();
+  QVERIFY(!activity.value("summary").toString().contains("private-signature"));
+  QVERIFY(!activity.value("actor").toString().contains("fixture-private-credential"));
+  QCOMPARE(visibleText("partial {\"reasoning_content\":\"secret"), QString("[Provider payload omitted]"));
+  QVERIFY(controller.saveApiKey(0, ""));
+}
+
+void ControllerTests::outcomeUnknownCannotResumeAfterRestore() {
+  MobileAppController controller;
+  QVERIFY(controller.initialize());
+  QVERIFY(controller.createTable("Unknown result"));
+  auto state = controller.currentHandle();
+  state->phase = Phase::Paused;
+  state->paused = true;
+  state->continuationCommand.payload.insert("outcomeUnknown", true);
+  QVERIFY(controller.flushCurrentSession());
+  QVERIFY(!controller.runOrResume());
+  QCOMPARE(controller.currentTable().value("canResume").toBool(), false);
+  DatabaseManager database(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/ai_meeting_table.db", "unknown-verification");
+  QVERIFY(database.initialize());
+  const auto stored = database.loadTables();
+  QVERIFY(std::any_of(stored.cbegin(), stored.cend(), [&](const SessionState &row) {
+    return row.tableId == state->tableId && row.continuationCommand.payload.value("outcomeUnknown").toBool();
+  }));
+}
+
+void ControllerTests::interruptedRequestsRestoreWithoutReplay() {
+  QString interruptedId;
+  QString pendingId;
+  {
+    MobileAppController controller;
+    QVERIFY(controller.initialize());
+    QVERIFY(controller.createTable("Interrupted request"));
+    auto state = controller.currentHandle();
+    interruptedId = state->tableId;
+    state->phase = Phase::Planning;
+    state->continuationCommand.payload.insert("requestInFlight", true);
+    QVERIFY(controller.m_context.saveExisting(interruptedId));
+    QVERIFY(controller.createTable("Safe delayed operation"));
+    state = controller.currentHandle();
+    pendingId = state->tableId;
+    state->phase = Phase::Planning;
+    state->continuationCommand = {RunnerCommandType::RequestSeatTurn, pendingId,
+                                 Phase::Planning, "seat-next", {}};
+    QVERIFY(controller.m_context.saveExisting(pendingId));
+  }
+  MobileAppController restored;
+  QVERIFY(restored.initialize());
+  restored.selectTable(interruptedId);
+  QCOMPARE(restored.currentTable().value("phase").toString(), QString("Paused"));
+  QVERIFY(!restored.currentTable().value("canResume").toBool());
+  QVERIFY(!restored.runOrResume());
+  restored.selectTable(pendingId);
+  QCOMPARE(restored.currentTable().value("phase").toString(), QString("Paused"));
+  QVERIFY(restored.currentTable().value("canResume").toBool());
+  QCOMPARE(restored.currentHandle()->continuationCommand.targetSeatId, QString("seat-next"));
+}
+
 void ControllerTests::initTestCase() {
+  // Fail closed if a fixture ever accidentally reaches the network transport.
+  QNetworkProxy::setApplicationProxy(QNetworkProxy(QNetworkProxy::HttpProxy, "127.0.0.1", 9));
   QStandardPaths::setTestModeEnabled(true);
   QCoreApplication::setOrganizationName("Synsemble Tests");
   QCoreApplication::setApplicationName("Controller Tests");
@@ -55,6 +333,9 @@ void ControllerTests::newTablesStartEmptyAndPersist() {
   {
     MobileAppController controller;
     QVERIFY(controller.initialize());
+    QVERIFY(controller.tables().isEmpty());
+    QVERIFY(controller.currentTableId().isEmpty());
+    QVERIFY(controller.createTable("Existing table"));
     existingTableId = controller.currentTableId();
     const auto existing = controller.m_context.tableHandle(existingTableId);
     QVERIFY(existing);
@@ -308,7 +589,8 @@ void ControllerTests::attachmentMetadataAddedOnlyAfterSuccess() {
 
   QSignalSpy importChanged(&controller,
                            &MobileAppController::attachmentImportChanged);
-  QVERIFY(controller.addAttachment(QUrl::fromLocalFile(sourcePath)));
+  QVERIFY(controller.createTable("Switched while picker was open"));
+  QVERIFY(controller.addAttachmentForTable(tableId, QUrl::fromLocalFile(sourcePath)));
   QVERIFY(controller.attachmentImportInProgress());
   QCOMPARE(handle->attachments.size(), initialCount);
   QVERIFY(!controller.addAttachment(QUrl::fromLocalFile(sourcePath)));
@@ -323,6 +605,8 @@ void ControllerTests::attachmentMetadataAddedOnlyAfterSuccess() {
                QCryptographicHash::hash(content, QCryptographicHash::Sha256)
                    .toHex()));
   QCOMPARE(QFileInfo(imported.filePath).size(), qint64(content.size()));
+  QVERIFY(controller.attachments().isEmpty());
+  controller.selectTable(tableId);
   QCOMPARE(controller.attachments().size(), initialCount + 1);
   QVERIFY(controller.removeAttachment(imported.attachmentId));
   QVERIFY(!QFile::exists(imported.filePath));
@@ -412,7 +696,7 @@ void ControllerTests::startupCleanupPreservesOwnedAttachments() {
       "/attachments";
   QVERIFY(QDir().mkpath(attachmentRoot));
 
-  const QString ownedPath = attachmentRoot + "/owned-existing.txt";
+  const QString ownedPath = attachmentRoot + "/owned-existing.part";
   const QString orphanPath = attachmentRoot + "/completed-unowned.txt";
   const QString partialPath = attachmentRoot + "/interrupted.part";
   for (const QString &path : {ownedPath, orphanPath, partialPath}) {

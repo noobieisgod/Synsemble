@@ -19,6 +19,7 @@
 #include <QUuid>
 
 #include "core/logging.h"
+#include "core/visible_text.h"
 #include "core/startup_timeline.h"
 
 namespace amt {
@@ -126,7 +127,7 @@ MobileAppController::MobileAppController(QObject *parent)
             emit stateChanged();
         }
     });
-    connect(m_context.modelCatalogManager(), &ModelCatalogManager::fetchCompleted, this, [this]() {
+    connect(m_context.modelCatalogManager(), &ModelCatalogManager::statusesChanged, this, [this]() {
         emit settingsChanged();
     });
     connect(&m_attachmentImportManager,
@@ -246,7 +247,7 @@ QVariantList MobileAppController::tables() const
     for (const auto *state : sorted) {
         rows.append(tableSummary(*state));
     }
-    return rows;
+    return sanitizedRows(rows);
 }
 
 QVariantMap MobileAppController::currentTable() const
@@ -266,7 +267,7 @@ QVariantList MobileAppController::seats() const
     for (int i = 0; i < source.size(); ++i) {
         rows.append(seatSummary(source.at(i), i));
     }
-    return rows;
+    return sanitizedRows(rows);
 }
 
 QVariantList MobileAppController::transcript() const
@@ -279,7 +280,7 @@ QVariantList MobileAppController::transcript() const
     for (const auto &entry : state->transcript) {
         rows.append(transcriptSummary(entry));
     }
-    return rows;
+    return sanitizedRows(rows);
 }
 
 QVariantList MobileAppController::attachments() const
@@ -292,7 +293,7 @@ QVariantList MobileAppController::attachments() const
     for (const auto &attachment : state->attachments) {
         rows.append(attachmentSummary(attachment));
     }
-    return rows;
+    return sanitizedRows(rows);
 }
 
 QString MobileAppController::fullTranscriptText() const
@@ -303,15 +304,16 @@ QString MobileAppController::fullTranscriptText() const
     }
 
     QStringList entries;
+    const auto secrets = presentationSecrets();
     entries.reserve(state->transcript.size());
     for (const auto &entry : state->transcript) {
         const QString speaker = entry.isUser ? QStringLiteral("You") : entry.speakerName;
         entries.append(QStringLiteral("[%1] %2 | %3 | Round %4\n%5")
                            .arg(entry.timestamp.toLocalTime().toString("HH:mm:ss"),
-                                speaker,
+                                visibleText(speaker, secrets),
                                 toString(entry.phase),
                                 QString::number(entry.round),
-                                entry.content));
+                                visibleText(entry.content, secrets)));
     }
     return entries.join("\n\n");
 }
@@ -343,7 +345,7 @@ QVariantList MobileAppController::artifacts() const
     for (const auto &artifact : state->artifacts) {
         rows.append(artifactSummary(artifact));
     }
-    return rows;
+    return sanitizedRows(rows);
 }
 
 QString MobileAppController::artifactContent(const QString &versionId) const
@@ -369,7 +371,7 @@ QString MobileAppController::artifactContent(const QString &versionId) const
     if (file.size() > maxArtifactPreviewBytes) {
         content += QString("\n\n[Artifact preview truncated. Full artifact is %1 bytes.]").arg(file.size());
     }
-    return content;
+    return visibleText(content, presentationSecrets());
 }
 
 QVariantList MobileAppController::logs() const
@@ -382,7 +384,7 @@ QVariantList MobileAppController::logs() const
     for (const auto &event : state->log) {
         rows.append(logSummary(event));
     }
-    return rows;
+    return sanitizedRows(rows);
 }
 
 QVariantList MobileAppController::modelsForProvider(int providerIndex) const
@@ -412,6 +414,7 @@ QVariantMap MobileAppController::settings() const
         {"appearance", toString(settings.theme)},
         {"colorTheme", settings.colorTheme},
         {"fontStyle", settings.fontStyle},
+        {"quickGuideSeen", QSettings().value("ui/quickGuideSeen", false).toBool()},
         {"maxTokensPerPhase", budget.maxTokensPerPhase},
         {"maxTotalTokens", budget.maxTotalTokens},
         {"maxRounds", budget.maxRounds},
@@ -466,9 +469,13 @@ void MobileAppController::selectTable(const QString &tableId)
 
 bool MobileAppController::createTable(const QString &title)
 {
+    if (!m_initialized) {
+        setError("Local storage must initialize successfully before creating a table.");
+        return false;
+    }
     SessionState state;
     state.tableId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    state.title = title.trimmed().isEmpty() ? "New Meeting Table" : title.trimmed();
+    state.title = title.trimmed().isEmpty() ? "New table" : title.trimmed();
     state.updatedAt = QDateTime::currentDateTimeUtc();
     state.phase = Phase::Idle;
     state.round = 1;
@@ -502,6 +509,14 @@ bool MobileAppController::duplicateCurrentTable()
     copy.usedCost = 0.0;
     copy.phaseUsedTokens = 0;
     copy.phaseUsedCost = 0.0;
+    copy.seatUsage.clear();
+    copy.usageEstimateUsed = false;
+    copy.costEstimateComplete = true;
+    copy.pendingResearchResponses = 0;
+    copy.arbitrationSatisfied = false;
+    if (hasPendingSeatChanges(copy)) copy.seats = copy.pendingSeats;
+    copy.pendingSeats.clear();
+    copy.finalDecisionMakerSeatId = findFinalDecisionMakerSeatId(copy.seats);
     copy.activeSeatId.clear();
     copy.transcript.clear();
     copy.log.clear();
@@ -550,11 +565,11 @@ bool MobileAppController::deleteCurrentTable()
         m_attachmentImportManager.cancelActive();
         emit attachmentImportChanged();
     }
-    m_context.sessionRunner()->discardSession(tableId);
     if (!m_context.removeTable(tableId)) {
         setError("The table could not be deleted.");
         return false;
     }
+    m_context.sessionRunner()->discardSession(tableId);
     m_uiSnapshots.remove(tableId);
     m_pendingSaveIds.remove(tableId);
     m_currentTableId.clear();
@@ -648,6 +663,10 @@ bool MobileAppController::sendMessage(const QString &message)
         setError("Enter a message first.");
         return false;
     }
+    if (state->continuationCommand.payload.value("outcomeUnknown").toBool()) {
+        setError("This session is locked because provider work is unconfirmed. Create a fresh table to start a new task.");
+        return false;
+    }
     SessionState candidate = *state;
     TranscriptEntry entry;
     entry.entryId = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -676,10 +695,41 @@ bool MobileAppController::sendMessage(const QString &message)
     return saveAndNotify(candidate);
 }
 
+bool MobileAppController::submitTask(const QString &message)
+{
+    auto *state = currentState();
+    if (!state || message.trimmed().isEmpty()) {
+        setError("Enter a task first.");
+        return false;
+    }
+    const bool start = state->phase == Phase::Idle;
+    if (start) {
+        SessionState candidate = *state;
+        TranscriptEntry task;
+        task.isUser = true;
+        task.content = message.trimmed();
+        candidate.transcript.append(task);
+        if (!validateRunnable(candidate)) return false;
+        for (const auto &seat : candidate.seats) {
+            if (seat.occupied && seat.enabled && !hasCredential(indexFromProviderKind(seat.provider))) {
+                setError(QString("Save an API key for %1 in Settings first.").arg(toString(seat.provider)));
+                return false;
+            }
+        }
+    }
+    if (!sendMessage(message)) return false;
+    if (start) m_context.sessionRunner()->startSession(*currentState());
+    return true;
+}
+
 bool MobileAppController::runOrResume()
 {
     auto *state = currentState();
     if (!state) {
+        return false;
+    }
+    if (state->continuationCommand.payload.value("outcomeUnknown").toBool()) {
+        setError("The provider outcome is unknown. This operation cannot be replayed.");
         return false;
     }
     if (state->continuationPending) {
@@ -688,6 +738,10 @@ bool MobileAppController::runOrResume()
         return true;
     }
     if (state->paused || state->phase == Phase::Paused) {
+        if (state->continuationCommand.commandType == RunnerCommandType::None) {
+            setError("No pending operation was saved. Create a fresh table; this session cannot safely resume.");
+            return false;
+        }
         m_context.sessionRunner()->resumeSession(*state);
         return true;
     }
@@ -720,9 +774,18 @@ bool MobileAppController::stopSession()
 
 bool MobileAppController::addAttachment(const QUrl &url)
 {
-    auto *state = currentState();
+    return addAttachmentForTable(m_currentTableId, url);
+}
+
+bool MobileAppController::addAttachmentForTable(const QString &tableId, const QUrl &url)
+{
+    const auto state = m_context.tableHandle(tableId);
     if (!state) {
         setError("No table is selected.");
+        return false;
+    }
+    if (state->continuationCommand.payload.value("outcomeUnknown").toBool()) {
+        setError("This session is locked because provider work is unconfirmed. Create a fresh table to start a new task.");
         return false;
     }
     if (m_attachmentImportInProgress) {
@@ -764,6 +827,10 @@ bool MobileAppController::removeAttachment(const QString &attachmentId)
 {
     auto *state = currentState();
     if (!state) {
+        return false;
+    }
+    if (state->continuationCommand.payload.value("outcomeUnknown").toBool()) {
+        setError("This session is locked because provider work is unconfirmed. Create a fresh table to start a new task.");
         return false;
     }
     SessionState candidate = *state;
@@ -837,6 +904,40 @@ void MobileAppController::refreshModels()
 {
     m_context.modelCatalogManager()->fetchModelsAsync();
     emit settingsChanged();
+}
+
+void MobileAppController::refreshProviderModels(int providerIndex)
+{
+    if (providerIndex < 0 || providerIndex > 2) return;
+    m_context.modelCatalogManager()->fetchModelsAsync(providerFromIndex(providerIndex));
+}
+
+bool MobileAppController::acknowledgeQuickGuide()
+{
+    QSettings settings;
+    settings.setValue("ui/quickGuideSeen", true);
+    settings.sync();
+    if (settings.status() != QSettings::NoError) {
+        setError("Could not save the quick-guide preference.");
+        return false;
+    }
+    emit settingsChanged();
+    return true;
+}
+
+bool MobileAppController::removeAgent(int seatIndex)
+{
+    const auto *state = currentState();
+    if (!state) return false;
+    const auto &seats = hasPendingSeatChanges(*state) ? state->pendingSeats : state->seats;
+    if (seatIndex < 0 || seatIndex >= seats.size()) {
+        setError("Invalid agent.");
+        return false;
+    }
+    // Reuse the existing validated inactive-slot path; preserve stable IDs/history.
+    const auto seat = seats[seatIndex];
+    return saveSeat(seatIndex, false, seat.displayName, indexFromProviderKind(seat.provider),
+                    seat.modelId, 0, 0, seat.color);
 }
 
 void MobileAppController::setTheme(const QString &theme)
@@ -933,22 +1034,18 @@ bool MobileAppController::saveGlobalBudget(int maxTokensPerPhase,
 
 bool MobileAppController::flushCurrentSession()
 {
-    auto *state = currentState();
-    if (!state) {
-        qWarning().noquote() << "Persistence flush skipped: no current table";
-        return false;
+    QSet<QString> pending = m_pendingSaveIds;
+    if (!m_currentTableId.isEmpty()) pending.insert(m_currentTableId);
+    bool saved = true;
+    for (const auto &id : pending) {
+        if (!m_context.tableHandle(id)) { m_pendingSaveIds.remove(id); continue; }
+        if (m_context.saveExisting(id)) m_pendingSaveIds.remove(id);
+        else { m_pendingSaveIds.insert(id); saved = false; }
     }
-    m_pendingSaveIds.remove(state->tableId);
-    const bool saved = m_context.saveExisting(state->tableId);
     QSettings settings;
     settings.setValue("mobile/currentTableId", m_currentTableId);
     settings.sync();
-    qCDebug(diagnosticsLog).noquote() << QString("Persistence flush: saved=%1 transcript=%2 artifacts=%3 logs=%4")
-                             .arg(saved ? "true" : "false",
-                                  QString::number(state->transcript.size()),
-                                  QString::number(state->artifacts.size()),
-                                  QString::number(state->log.size()));
-    return saved;
+    return saved && settings.status() == QSettings::NoError;
 }
 
 SessionState *MobileAppController::currentState() const
@@ -1032,8 +1129,9 @@ void MobileAppController::persistScheduledSessions()
     m_pendingSaveIds.clear();
     m_persistenceScheduled = false;
     for (const auto &tableId : pending) {
-        if (!m_context.saveExisting(tableId) && tableId == m_currentTableId) {
-            setError("The current table could not be saved.");
+        if (!m_context.saveExisting(tableId) && m_context.tableHandle(tableId)) {
+            m_pendingSaveIds.insert(tableId);
+            setError("A table could not be saved. Pending changes will be retried on flush.");
         }
     }
 }
@@ -1129,10 +1227,59 @@ QVariantMap MobileAppController::tableSummary(const SessionState &state) const
         outputTokens += usage.outputTokens;
     }
     QVariantMap row;
+    row.insert("continuationPending", state.continuationPending);
+    row.insert("continuationReason", visibleText(state.continuationReason));
+    row.insert("canResume", !state.continuationCommand.payload.value("outcomeUnknown").toBool());
+    const bool unknown = state.continuationCommand.payload.value("outcomeUnknown").toBool();
+    QString action, label, hint;
+    QString latestFailure;
+    for (auto it = state.log.crbegin(); it != state.log.crend(); ++it) {
+        if (it->type == LogEventType::SessionStarted) break;
+        if (it->type == LogEventType::ProviderCallFailed) { latestFailure = visibleText(it->summary); break; }
+    }
+    if (unknown) {
+        action = "fresh"; label = "Create fresh table";
+        hint = "Provider work may have occurred. This session cannot be replayed. Create a fresh table to start a new task.";
+    } else if (state.continuationPending) {
+        action = "continue"; label = "Continue";
+        hint = "A configured limit paused the session. Continue authorizes the pending operation once. Sending instructions does not resume it.";
+    } else if (state.phase == Phase::Paused || state.paused) {
+        if (state.continuationCommand.commandType == RunnerCommandType::None) {
+            action = "fresh"; label = "Create fresh table";
+            hint = "No pending operation was saved. Create a fresh table to proceed without guessing what to replay.";
+        } else if (state.continuationCommand.payload.value("responseRejected").toBool()) {
+            action = "retry"; label = "Retry operation";
+            hint = "The returned response could not be used. Review Activity and provider settings. Retry explicitly sends this operation again and may incur additional usage.";
+        } else {
+            action = "resume"; label = "Resume";
+            hint = "Resume the saved pending operation. Sending instructions alone does not resume the session.";
+        }
+    } else if (state.phase == Phase::Idle) {
+        action = "start"; label = "Start task";
+        hint = "Describe a task, then choose Start task. Configure your team and provider keys first.";
+    } else if (state.phase == Phase::Completed || state.phase == Phase::Stopped || state.phase == Phase::Failed) {
+        action = "restart"; label = "Run again";
+        hint = latestFailure.isEmpty()
+            ? "Review the results or choose Run again to explicitly start another run with the existing task and history."
+            : "The run ended after a provider failure. Review Activity, Providers and models, and Team. After correcting the issue, Run again starts a new run, not just the failed turn.";
+        if (state.phase == Phase::Completed && !state.artifacts.isEmpty()) {
+            hint.prepend("Your final result is ready. Tap Team, then choose Artifacts to read it. ");
+        }
+    } else {
+        action = "pause"; label = "Pause";
+        hint = latestFailure.isEmpty() ? "Agents are working. Pause waits for in-flight work; Stop is in session details."
+            : "A provider operation failed. The workflow is continuing without that response. Review Activity and provider settings, or Pause.";
+    }
+    row.insert("nextAction", action);
+    row.insert("actionLabel", label);
+    row.insert("actionHint", hint);
+    row.insert("latestFailure", latestFailure);
+    row.insert("canSubmit", !unknown);
     row.insert("tableId", state.tableId);
     row.insert("title", state.title);
     row.insert("pinned", state.pinned);
     row.insert("phase", phaseBadge(state));
+    row.insert("statusLabel", unknown ? QString("Paused · outcome unknown") : phaseBadge(state));
     row.insert("round", state.round);
     row.insert("activeSeatId", state.activeSeatId);
     row.insert("usedTokens", state.usedTokens);
@@ -1271,7 +1418,7 @@ void MobileAppController::handleAttachmentImportFinished(const AttachmentImportR
     }
 
     const auto handle = m_context.tableHandle(targetTableId);
-    if (!handle) {
+    if (!handle || handle->continuationCommand.payload.value("outcomeUnknown").toBool()) {
         m_context.cleanupAttachmentFileIfUnreferenced(result.finalPath);
         return;
     }
@@ -1298,6 +1445,32 @@ void MobileAppController::handleAttachmentImportFinished(const AttachmentImportR
         return;
     }
     setError({});
+}
+
+QStringList MobileAppController::presentationSecrets() const
+{
+    QStringList secrets;
+    for (const auto provider : {ProviderKind::OpenAI, ProviderKind::Gemini, ProviderKind::Anthropic}) {
+        const auto key = m_context.credentialStore()->loadApiKey(provider);
+        if (!key.isEmpty()) secrets.append(key);
+    }
+    return secrets;
+}
+
+QVariantList MobileAppController::sanitizedRows(QVariantList rows) const
+{
+    const auto secrets = presentationSecrets();
+    for (auto &value : rows) {
+        auto *row = get_if<QVariantMap>(&value);
+        if (!row) continue;
+        for (auto it = row->begin(); it != row->end(); ++it) {
+            // IDs and filesystem paths are operational data, not displayed content.
+            if (it.key().endsWith("Id") || it.key() == "filePath") continue;
+            if (it.value().metaType().id() == QMetaType::QString)
+                it.value() = visibleText(it.value().toString(), secrets);
+        }
+    }
+    return rows;
 }
 
 void MobileAppController::setError(const QString &error) const

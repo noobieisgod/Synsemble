@@ -72,15 +72,20 @@ public:
                               int roleIndex,
                               const QString &color);
     Q_INVOKABLE bool sendMessage(const QString &message);
+    Q_INVOKABLE bool submitTask(const QString &message);
     Q_INVOKABLE bool runOrResume();
     Q_INVOKABLE bool pauseSession();
     Q_INVOKABLE bool stopSession();
     Q_INVOKABLE bool addAttachment(const QUrl &url);
+    Q_INVOKABLE bool addAttachmentForTable(const QString &tableId, const QUrl &url);
     Q_INVOKABLE bool cancelAttachmentImport();
     Q_INVOKABLE bool removeAttachment(const QString &attachmentId);
     Q_INVOKABLE bool openAttachment(const QString &attachmentId);
     Q_INVOKABLE bool saveApiKey(int providerIndex, const QString &apiKey);
     Q_INVOKABLE void refreshModels();
+    Q_INVOKABLE void refreshProviderModels(int providerIndex);
+    Q_INVOKABLE bool acknowledgeQuickGuide();
+    Q_INVOKABLE bool removeAgent(int seatIndex);
     Q_INVOKABLE void setTheme(const QString &theme);
     Q_INVOKABLE bool saveAppearance(const QString &appearance,
                                     const QString &colorTheme,
@@ -125,6 +130,8 @@ private:
     QVariantMap logSummary(const LogEvent &event) const;
     void handleAttachmentImportFinished(const AttachmentImportResult &result);
     void setError(const QString &error) const;
+    QStringList presentationSecrets() const;
+    QVariantList sanitizedRows(QVariantList rows) const;
 
     struct UiSnapshot {
         qsizetype transcriptCount = 0;
