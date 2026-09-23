@@ -2,6 +2,8 @@
 
 <img src="branding/synsemble.png" alt="Synsemble symbol" width="80">
 
+## WARNING: THE CURRENT DESKTOP BUILD IS DEFUNCT AND WILL NOT BE UPDATED
+
 Synsemble is a multi-agent AI collaboration app that brings multiple AI roles together to plan, analyze, execute, review, revise, and produce a final result.
 
 Synsemble is not primarily an AI meeting recorder, transcription app, or AI meeting notetaker. Its table and seat metaphor represents multiple AI agents collaborating on a task with assigned providers, models, and roles.
