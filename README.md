@@ -1,7 +1,4 @@
 # Synsemble
-
-<img src="branding/synsemble.png" alt="Synsemble symbol" width="80">
-
 **WARNING: THE CURRENT DESKTOP BUILD IS DEFUNCT AND WILL NOT BE UPDATED**
 
 Synsemble is a multi-agent AI collaboration app that brings multiple AI roles together to plan, analyze, execute, review, revise, and produce a final result.
