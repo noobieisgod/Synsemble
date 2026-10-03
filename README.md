@@ -1,5 +1,5 @@
 # Synsemble
-**WARNING: THE CURRENT DESKTOP BUILD IS DEFUNCT AND WILL NOT BE UPDATED**
+**WARNING: THE CURRENT DESKTOP BUILD IS DEFUNCT AND WILL NOT BE UPDATED. This repository now serves as the open source code storage for the Synsemble mobile app.**
 
 Synsemble is a multi-agent AI collaboration app that brings multiple AI roles together to plan, analyze, execute, review, revise, and produce a final result.
 
