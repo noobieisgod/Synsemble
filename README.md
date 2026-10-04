@@ -1,5 +1,7 @@
 # Synsemble
-**WARNING: THE CURRENT DESKTOP BUILD IS DEFUNCT AND WILL NOT BE UPDATED. This repository now serves as the open source code storage for the Synsemble mobile app.**
+**WARNING: THE CURRENT DESKTOP BUILD IS DEFUNCT AND WILL NOT BE UPDATED.**
+
+**Ever since release v1.1, this desktop client of Synsemble (or AI Meeting Table before) has been abandoned. Due to time constraints, complexity of maintaining two separate platforms, and me being a solo developer, I have decided to shift my entire focus of Synsemble from desktop and mobile to mobile only. The desktop Synsemble app is no longer maintained, so use at your own risk. This repository may occasionally receive large commits, it doesn't mean that it was all written in a single session. Any new commit on this repository is the open source code for the mobile app and any other data.**
 
 Synsemble is a multi-agent AI collaboration app that brings multiple AI roles together to plan, analyze, execute, review, revise, and produce a final result.
 
