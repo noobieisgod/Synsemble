@@ -44,4 +44,4 @@ The Qt Quick application also builds on desktop for development and automated va
 Historical note: Synsemble was formerly developed under the name AI Meeting Table.
 
 ## License
-Synsemble is licensed under the [GNU Affero General Public License v3.0](LICENSE.txt).
+Synsemble is now licensed under the MIT license. Any previous versions using AGPL-3.0 must still follow AGPL-3.0 requirements due to some of Synsemble's dependencies being licensed under AGPL-3.0.
